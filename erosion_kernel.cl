@@ -59,6 +59,12 @@ typedef struct
 
 } FlowState;
 
+typedef struct
+{
+	float flux[8];
+
+} ThermalErosionState;
+
 
 //typedef struct
 //{
@@ -81,6 +87,8 @@ typedef struct
 	float K_d;// = 0.01; // 1; // deposition constant
 	float K_dmax;// = 0.1f; // Maximum erosion depth: water depth at which erosion stops.
 	float K_e; // Evaporation constant
+
+	float K_t; // thermal erosion constant
 } Constants;
 
 
@@ -168,6 +176,98 @@ __kernel void flowSimulationKernel(
 	new_flow_state_middle->f_R = f_R_next;
 	new_flow_state_middle->f_T = f_T_next;
 	new_flow_state_middle->f_B = f_B_next;
+}
+
+
+// Sets flux in thermal_erosion_state
+__kernel void thermalErosionFluxKernel(
+	__global const TerrainState* restrict const terrain_state, 
+	__global       ThermalErosionState* restrict const thermal_erosion_state, 
+	__global Constants* restrict const constants
+)
+{
+	const int x = get_global_id(0);
+	const int y = get_global_id(1);
+
+	const int x_minus_1 = wrapX(x - 1);
+	const int x_plus_1  = wrapX(x + 1);
+	const int y_minus_1 = wrapY(y - 1);
+	const int y_plus_1  = wrapY(y + 1);
+
+	__global const TerrainState* const state_0      = &terrain_state[x_minus_1 + y_plus_1  * W];
+	__global const TerrainState* const state_1      = &terrain_state[x         + y_plus_1  * W];
+	__global const TerrainState* const state_2      = &terrain_state[x_plus_1  + y_plus_1  * W];
+	__global const TerrainState* const state_3      = &terrain_state[x_minus_1 + y         * W];
+	__global const TerrainState* const state_middle = &terrain_state[x         + y         * W];
+	__global const TerrainState* const state_4      = &terrain_state[x_plus_1  + y         * W];
+	__global const TerrainState* const state_5      = &terrain_state[x_minus_1 + y_minus_1 * W];
+	__global const TerrainState* const state_6      = &terrain_state[x         + y_minus_1 * W];
+	__global const TerrainState* const state_7      = &terrain_state[x_plus_1  + y_minus_1 * W];
+
+	__global       ThermalErosionState* const thermal_erosion_state_middle = &thermal_erosion_state[x         + y          *W];
+
+
+	const float middle_h = state_middle->height;
+	const float h_0 = middle_h - state_0->height; // height diff between adjacent cell and middle cell
+	const float h_1 = middle_h - state_1->height;
+	const float h_2 = middle_h - state_2->height;
+	const float h_3 = middle_h - state_3->height;
+	const float h_4 = middle_h - state_4->height;
+	const float h_5 = middle_h - state_5->height;
+	const float h_6 = middle_h - state_6->height;
+	const float h_7 = middle_h - state_7->height;
+
+	const float max_height_diff = // H
+		max(
+			max(
+				max(h_0, h_1),
+				max(h_2, h_3)
+			),
+			max(
+				max(h_4, h_5),
+				max(h_6, h_7)
+			)
+		);
+
+	const float tan_angle_0 = h_0 * (1 / sqrt(2.f));
+	const float tan_angle_1 = h_1;
+	const float tan_angle_2 = h_2 * (1 / sqrt(2.f));
+	const float tan_angle_3 = h_3;
+	const float tan_angle_4 = h_4;
+	const float tan_angle_5 = h_5 * (1 / sqrt(2.f));
+	const float tan_angle_6 = h_6;
+	const float tan_angle_7 = h_7 * (1 / sqrt(2.f));
+
+	const float tan_max_talus_angle = tan(0.7f);
+
+	// Total height difference, for cells for which the height difference exceeds the max talus angle
+	const float total_height_diff = 
+		((tan_angle_0 > tan_max_talus_angle) ? h_0 : 0.0) + 
+		((tan_angle_1 > tan_max_talus_angle) ? h_1 : 0.0) + 
+		((tan_angle_2 > tan_max_talus_angle) ? h_2 : 0.0) + 
+		((tan_angle_3 > tan_max_talus_angle) ? h_3 : 0.0) + 
+		((tan_angle_4 > tan_max_talus_angle) ? h_4 : 0.0) + 
+		((tan_angle_5 > tan_max_talus_angle) ? h_5 : 0.0) + 
+		((tan_angle_6 > tan_max_talus_angle) ? h_6 : 0.0) + 
+		((tan_angle_7 > tan_max_talus_angle) ? h_7 : 0.0);
+
+	const float norm_factor = 1.f / total_height_diff;
+
+	const float a = 1.0f; // cell area
+	const float R = 1.0f; // hardness
+	float common_factors;
+	if(max_height_diff > 0 && total_height_diff > 0)
+		common_factors = norm_factor * a * constants->delta_t * constants->K_t * R * max(max_height_diff, 0.0f) * 0.5f;
+	else
+		common_factors = 0;
+	thermal_erosion_state_middle->flux[0] = h_0 * common_factors;
+	thermal_erosion_state_middle->flux[1] = h_1 * common_factors;
+	thermal_erosion_state_middle->flux[2] = h_2 * common_factors;
+	thermal_erosion_state_middle->flux[3] = h_3 * common_factors;
+	thermal_erosion_state_middle->flux[4] = h_4 * common_factors;
+	thermal_erosion_state_middle->flux[5] = h_5 * common_factors;
+	thermal_erosion_state_middle->flux[6] = h_6 * common_factors;
+	thermal_erosion_state_middle->flux[7] = h_7 * common_factors;
 }
 
 
@@ -303,7 +403,7 @@ __kernel void erosionAndDepositionKernel(
 	// Compute Sediment transport capacity (eq 10)
 
 	// TEMP NEW d
-	const float C = /*d * */constants->K_c * v_len * use_sin_alpha;//use_sin_alpha * v_len /** (1.0 - l_max)*/;//f/min(10000.0f, v_len);
+	const float C = /*d * */constants->K_c * v_len * use_sin_alpha * l_max;//use_sin_alpha * v_len /** (1.0 - l_max)*/;//f/min(10000.0f, v_len);
 			
 	const float b_t = state_middle->height;
 	const float s_t = state_middle->suspended;
@@ -365,6 +465,60 @@ __kernel void sedimentTransportationKernel(
 		t_x, t_y);
 
 	state_middle->suspended = old_s;
+}
+
+
+/*
+
+0      1      2
+
+
+3      x      4
+
+
+5      6      7
+
+
+
+*/
+__kernel void thermalErosionMovementKernel(
+	__global       ThermalErosionState* restrict const thermal_erosion_state, 
+	__global       TerrainState* restrict const terrain_state, 
+	__global Constants* restrict const constants
+)
+{
+	const int x = get_global_id(0);
+	const int y = get_global_id(1);
+
+	const int x_minus_1 = wrapX(x - 1);
+	const int x_plus_1  = wrapX(x + 1);
+	const int y_minus_1 = wrapY(y - 1);
+	const int y_plus_1  = wrapY(y + 1);
+
+	__global const ThermalErosionState* const state_0      = &thermal_erosion_state[x_minus_1 + y_plus_1  * W];
+	__global const ThermalErosionState* const state_1      = &thermal_erosion_state[x         + y_plus_1  * W];
+	__global const ThermalErosionState* const state_2      = &thermal_erosion_state[x_plus_1  + y_plus_1  * W];
+	__global const ThermalErosionState* const state_3      = &thermal_erosion_state[x_minus_1 + y         * W];
+
+	__global const ThermalErosionState* const state_4      = &thermal_erosion_state[x_plus_1  + y         * W];
+	__global const ThermalErosionState* const state_5      = &thermal_erosion_state[x_minus_1 + y_minus_1 * W];
+	__global const ThermalErosionState* const state_6      = &thermal_erosion_state[x         + y_minus_1 * W];
+	__global const ThermalErosionState* const state_7      = &thermal_erosion_state[x_plus_1  + y_minus_1 * W];
+
+	__global       TerrainState* const middle_terrain_state = &terrain_state[x         + y          *W];
+
+
+	float sum_material = 
+		state_0->flux[7] + 
+		state_1->flux[6] + 
+		state_2->flux[5] + 
+		state_3->flux[4] + 
+		state_4->flux[3] + 
+		state_5->flux[2] + 
+		state_6->flux[1] + 
+		state_7->flux[0];
+
+	middle_terrain_state->height += sum_material; // NOTE: Take into account area?
 }
 
 

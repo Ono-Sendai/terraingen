@@ -40,8 +40,8 @@ Copyright Nicholas Chapman 2023 -
 #include <string>
 
 
-const int W = 1024;
-const int H = 1024;
+const int W = 512;
+const int H = 512;
 const int W_mask = W - 1;
 const int H_mask = H - 1;
 
@@ -63,6 +63,12 @@ typedef struct
 
 } FlowState;
 
+typedef struct
+{
+	float flux[8];
+
+} ThermalErosionState;
+
 
 typedef struct 
 {
@@ -79,6 +85,8 @@ typedef struct
 	float K_d;// = 0.01; // 1; // deposition constant
 	float K_dmax;// = 0.1f; // Maximum erosion depth: water depth at which erosion stops.
 	float K_e; // Evaporation constant
+
+	float K_t; // thermal erosion constant
 } Constants;
 
 
@@ -100,17 +108,21 @@ public:
 
 	Array2D<TerrainState> terrain_state;
 	Array2D<FlowState> flow_state;
+	Array2D<ThermalErosionState> thermal_erosion_state;
 
 
 	OpenCLKernelRef flowSimulationKernel;
+	OpenCLKernelRef thermalErosionFluxKernel;
 	OpenCLKernelRef waterAndVelFieldUpdateKernel;
 	OpenCLKernelRef erosionAndDepositionKernel;
 	OpenCLKernelRef sedimentTransportationKernel;
+	OpenCLKernelRef thermalErosionMovementKernel;
 	OpenCLKernelRef evaporationKernel;
 
 	OpenCLBuffer terrain_state_buffer;
 	OpenCLBuffer flow_state_buffer_a;
 	OpenCLBuffer flow_state_buffer_b;
+	OpenCLBuffer thermal_erosion_state_buffer;
 	OpenCLBuffer constants_buffer;
 
 	Timer timer;
@@ -135,7 +147,7 @@ public:
 	{
 		OpenCLBuffer* cur_flow_state_buffer   = &flow_state_buffer_a;
 		OpenCLBuffer* other_flow_state_buffer = &flow_state_buffer_b;
-		
+
 		const int num_iters = 10; // Should be even so that we end up with cur_flow_state_buffer == flow_state_buffer_a
 		for(int z=0; z<num_iters; ++z)
 		{
@@ -145,7 +157,12 @@ public:
 			flowSimulationKernel->setKernelArgBuffer(3, constants_buffer);
 			flowSimulationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
-			mySwap(cur_flow_state_buffer, other_flow_state_buffer);
+			mySwap(cur_flow_state_buffer, other_flow_state_buffer); // Swap pointers
+
+			thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
+			thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
+			thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
+			thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);  // Swap pointers
 
 			waterAndVelFieldUpdateKernel->setKernelArgBuffer(0, *cur_flow_state_buffer);
 			waterAndVelFieldUpdateKernel->setKernelArgBuffer(1, terrain_state_buffer);
@@ -155,10 +172,15 @@ public:
 			erosionAndDepositionKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			erosionAndDepositionKernel->setKernelArgBuffer(1, constants_buffer);
 			erosionAndDepositionKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
-
+		
 			sedimentTransportationKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			sedimentTransportationKernel->setKernelArgBuffer(1, constants_buffer);
 			sedimentTransportationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+			
+			thermalErosionMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
+			thermalErosionMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
+			thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
+			thermalErosionMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
 			evaporationKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			evaporationKernel->setKernelArgBuffer(1, constants_buffer);
@@ -430,16 +452,19 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue)
 
 	sim.flow_state.setAllElems(flow_state);
 
+
 	for(int x=0; x<W; ++x)
 	for(int y=0; y<H; ++y)
 	{
 		float nx = (float)x / W;
 		float ny = (float)y / H;
 
-		sim.terrain_state.elem(x, y).height = (-nx*nx + nx) * 200.0f;
-		//const float r = Vec2f((float)x, (float)y).getDist(Vec2f((float)W/2, (float)H/2));
+		//sim.terrain_state.elem(x, y).height = (-nx*nx + nx) * 200.0f;
+		const float r = Vec2f((float)x, (float)y).getDist(Vec2f((float)W/2, (float)H/2));
 
-		const float perlin_factor = PerlinNoise::FBM(nx * 1.f, ny * 1.f, 3) + 1.f;
+		//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
+
+		const float perlin_factor = PerlinNoise::FBM(nx * 1.f, ny * 1.f, 10) + 1.f;
 		sim.terrain_state.elem(x, y).height = perlin_factor * 100.f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
 	}
 
@@ -513,18 +538,22 @@ int main(int, char**)
 		constants.K_c = 0.01f; // sediment capacity constant
 		constants.K_s = 0.01f; // dissolving constant.
 		constants.K_d = 0.01f; // deposition constant
-		constants.K_dmax = 10.f;
+		constants.K_dmax = 1.f;
 		constants.K_e = 1.0; // Evaporation constant
+		constants.K_t = 1.0; // Thermal erosion constant
 
 		sim.terrain_state_buffer.alloc(opencl_context, /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
 		sim.flow_state_buffer_a.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
 		sim.flow_state_buffer_b.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
+		sim.thermal_erosion_state_buffer.alloc(opencl_context, W * H * sizeof(ThermalErosionState), CL_MEM_READ_WRITE);
 		sim.constants_buffer.allocFrom(opencl_context, &constants, sizeof(Constants), CL_MEM_READ_ONLY);
 
 		sim.flowSimulationKernel = new OpenCLKernel(program, "flowSimulationKernel", opencl_device->opencl_device_id, profile);
+		sim.thermalErosionFluxKernel = new OpenCLKernel(program, "thermalErosionFluxKernel", opencl_device->opencl_device_id, profile);
 		sim.waterAndVelFieldUpdateKernel = new OpenCLKernel(program, "waterAndVelFieldUpdateKernel", opencl_device->opencl_device_id, profile);
 		sim.erosionAndDepositionKernel = new OpenCLKernel(program, "erosionAndDepositionKernel", opencl_device->opencl_device_id, profile);
 		sim.sedimentTransportationKernel = new OpenCLKernel(program, "sedimentTransportationKernel", opencl_device->opencl_device_id, profile);
+		sim.thermalErosionMovementKernel = new OpenCLKernel(program, "thermalErosionMovementKernel", opencl_device->opencl_device_id, profile);
 		sim.evaporationKernel = new OpenCLKernel(program, "evaporationKernel", opencl_device->opencl_device_id, profile);
 		
 
@@ -705,7 +734,9 @@ int main(int, char**)
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/10.f, "%.5f");
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation control");
