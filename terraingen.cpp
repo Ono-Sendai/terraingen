@@ -42,8 +42,6 @@ Copyright Nicholas Chapman 2023 -
 
 const int W = 512;
 const int H = 512;
-const int W_mask = W - 1;
-const int H_mask = H - 1;
 
 
 typedef struct
@@ -90,17 +88,6 @@ typedef struct
 	float max_talus_angle;
 	float tan_max_talus_angle;
 } Constants;
-
-
-inline int wrapX(int x)
-{
-	return x & W_mask;
-}
-
-inline int wrapY(int y)
-{
-	return y & H_mask;
-}
 
 
 class Simulation
@@ -572,7 +559,7 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 		{
 			float nx = (float)x / W;
 			const float tent = (nx < 0.5) ? nx : (1.0f - nx);
-			sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * 200.f;
+			sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * W / 2.0f;
 		}
 	}
 	else if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_FBM)
@@ -589,7 +576,7 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 			//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
 
 			const float perlin_factor = PerlinNoise::FBM(nx * 1.f, ny * 1.f, 10) + 1.f;
-			sim.terrain_state.elem(x, y).height = perlin_factor * 100.f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
+			sim.terrain_state.elem(x, y).height = perlin_factor * W / 5.0f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
 			//sim.terrain_state.elem(x, y).height = nx < 0.25 ? 0 : (nx < 0.5 ? (nx - 0.25) : (1.0f - (nx-0.25)) * 200.f;
 			//const float tent = (nx < 0.5) ? nx : (1.0f - nx);
 			//sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * 200.f;
@@ -604,7 +591,7 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 			float ny = (float)y / H;
 
 			const float perlin_factor = PerlinNoise::noise(nx * 1.f, ny * 1.f) + 1.f;
-			sim.terrain_state.elem(x, y).height = perlin_factor * 100.f;
+			sim.terrain_state.elem(x, y).height = perlin_factor * W / 5.0f;
 		}
 	}
 
