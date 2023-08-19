@@ -417,11 +417,32 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 }
 
 
+struct TerrainStats
+{
+	float total_volume;
+};
+
+TerrainStats computeTerrainStats(Simulation& sim)
+{
+	double sum_terrain_h = 0;
+	for(int y=0; y<H; ++y)
+	for(int x=0; x<W; ++x)
+	{
+		sum_terrain_h += sim.terrain_state.elem(x, y).height;
+	}
+	TerrainStats stats;
+	stats.total_volume = (float)sum_terrain_h; // TODO: take into account cell width when != 1.
+	return stats;
+}
+
+
+
+
 struct UpdateTexResults
 {
 	float max_value;
 };
-	
+
 UpdateTexResults updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture, TextureShow cur_texture_show, float tex_display_max_val)
 {
 	//const int W = sim.state1.getWidth();
@@ -805,6 +826,8 @@ int main(int, char**)
 		Timer timer;
 		Timer time_since_mesh_update;
 
+		TerrainStats stats = computeTerrainStats(sim);
+
 		float cam_phi = 0;
 		float cam_theta = 1.f;
 		Vec4f cam_target_pos = Vec4f(0,0,0,1);
@@ -959,6 +982,7 @@ int main(int, char**)
 			ImGui::TextColored(ImVec4(1,1,0,1), "Info");
 			ImGui::Text((std::string(sim_running ? "Sim running" : "Sim paused") + ", iteration: " + toString(sim.sim_iteration)).c_str());
 			
+			ImGui::Text(("Total terrain volume: " + doubleToStringScientific(stats.total_volume, 4) + "m^3").c_str());
 			ImGui::Text(("max texture value: " + toString(results.max_value)).c_str());
 			ImGui::End(); 
 
@@ -993,6 +1017,10 @@ int main(int, char**)
 				terrain_gl_ob->materials[0].albedo_texture = terrain_col_tex;
 
 				opengl_engine->addObject(terrain_gl_ob);
+
+
+				// Update statistics
+				stats = computeTerrainStats(sim);
 
 				time_since_mesh_update.reset();
 			}

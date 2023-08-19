@@ -11,17 +11,6 @@ Copyright Nicholas Chapman 2023 -
 // http://www.cescg.org/CESCG-2011/papers/TUBudapest-Jako-Balazs.pdf
 
 
-inline float biLerp(float a, float b, float c, float d, float t_x, float t_y)
-{
-	const float one_t_x = 1 - t_x;
-	const float one_t_y = 1 - t_y;
-	return 
-		one_t_x * one_t_y * a + 
-		t_x * one_t_y * b + 
-		one_t_x * t_y * c + 
-		t_x * t_y * d;
-}
-
 inline float square(float x)
 {
 	return x*x;
@@ -465,6 +454,20 @@ __kernel void erosionAndDepositionKernel(
 }
 
 
+
+
+inline float biLerp(float a, float b, float c, float d, float t_x, float t_y)
+{
+	const float one_t_x = 1 - t_x;
+	const float one_t_y = 1 - t_y;
+	return 
+		one_t_x * one_t_y * a + 
+		t_x     * one_t_y * b + 
+		one_t_x * t_y     * c + 
+		t_x     * t_y     * d;
+}
+
+
 // sediment transportation kernel.  Updates 'suspended' in terrain_state
 __kernel void sedimentTransportationKernel(
 	__global       TerrainState* restrict const terrain_state, 
@@ -476,8 +479,8 @@ __kernel void sedimentTransportationKernel(
 
 	__global       TerrainState* const state_middle   = &terrain_state[x         + y          *W];
 
-	const float old_x = clamp((float)x - state_middle->u * constants->delta_t / constants->l_x, 0.0f, (float)(W-1)); // NOTE: should take into account l_x, l_y here
-	const float old_y = clamp((float)y - state_middle->v * constants->delta_t / constants->l_y, 0.0f, (float)(H-1));
+	const float old_x = clamp((float)x - state_middle->u * constants->delta_t/* / constants->l_x*/, 0.0f, (float)(W-1)); // NOTE: should take into account l_x, l_y here
+	const float old_y = clamp((float)y - state_middle->v * constants->delta_t/* / constants->l_y*/, 0.0f, (float)(H-1));
 
 	const float floor_old_x = floor(old_x);
 	const float floor_old_y = floor(old_y);
@@ -512,7 +515,7 @@ __kernel void sedimentTransportationKernel(
 
 */
 __kernel void thermalErosionMovementKernel(
-	__global       ThermalErosionState* restrict const thermal_erosion_state, 
+	__global const ThermalErosionState* restrict const thermal_erosion_state, 
 	__global       TerrainState* restrict const terrain_state, 
 	__global Constants* restrict const constants
 )
@@ -529,7 +532,7 @@ __kernel void thermalErosionMovementKernel(
 	__global const ThermalErosionState* const state_1      = &thermal_erosion_state[x         + y_plus_1  * W];
 	__global const ThermalErosionState* const state_2      = &thermal_erosion_state[x_plus_1  + y_plus_1  * W];
 	__global const ThermalErosionState* const state_3      = &thermal_erosion_state[x_minus_1 + y         * W];
-
+	__global const ThermalErosionState* const state_middle = &thermal_erosion_state[x         + y         * W];
 	__global const ThermalErosionState* const state_4      = &thermal_erosion_state[x_plus_1  + y         * W];
 	__global const ThermalErosionState* const state_5      = &thermal_erosion_state[x_minus_1 + y_minus_1 * W];
 	__global const ThermalErosionState* const state_6      = &thermal_erosion_state[x         + y_minus_1 * W];
@@ -564,7 +567,7 @@ __kernel void thermalErosionMovementKernel(
 		flux_0 = flux_1 = flux_2 = 0;
 	}
 
-	const float sum_material = 
+	const float sum_material_in = 
 		flux_0 +
 		flux_1 +
 		flux_2 +
@@ -574,7 +577,19 @@ __kernel void thermalErosionMovementKernel(
 		flux_6 +
 		flux_7;
 
-	middle_terrain_state->height += sum_material; // NOTE: Take into account area?
+	const float sum_material_out = 
+		state_middle->flux[0] + 
+		state_middle->flux[1] + 
+		state_middle->flux[2] + 
+		state_middle->flux[3] + 
+		state_middle->flux[4] + 
+		state_middle->flux[5] + 
+		state_middle->flux[6] + 
+		state_middle->flux[7];
+
+	const float net_material_change = sum_material_in - sum_material_out;
+
+	middle_terrain_state->height += net_material_change; // NOTE: Take into account area?
 }
 
 
