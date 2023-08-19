@@ -87,6 +87,8 @@ typedef struct
 	float K_e; // Evaporation constant
 
 	float K_t; // thermal erosion constant
+	float max_talus_angle;
+	float tan_max_talus_angle;
 } Constants;
 
 
@@ -140,6 +142,9 @@ public:
 	{
 		// Read back terrain state buffer to CPU mem
 		terrain_state_buffer.readTo(command_queue, /*dest ptr=*/&terrain_state.elem(0, 0), /*size=*/W * H * sizeof(TerrainState), /*blocking read=*/true);
+
+		// TEMP: just for debugging (showing/reading flux)
+		flow_state_buffer_a.readTo(command_queue, /*dest ptr=*/&flow_state.elem(0, 0), /*size=*/W * H * sizeof(FlowState), /*blocking read=*/true);
 	}
 
 
@@ -206,7 +211,51 @@ inline static uint32 packNormal(const Vec3f& normal)
 }
 
 
-OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* opengl_engine) 
+enum HeightFieldShow
+{
+	HeightFieldShow_TerrainOnly,
+	HeightFieldShow_TerrainAndWater
+};
+
+const char* HeightFieldShow_strings[] = 
+{
+	"terrain only",
+	"terrain and water"
+};
+
+
+enum TextureShow
+{
+	TextureShow_WaterDepth,
+	TextureShow_WaterSpeed,
+	TextureShow_SuspendedSediment
+};
+const char* TextureShow_strings[] = 
+{
+	"water depth",
+	"water speed",
+	"suspended sediment"
+};
+
+
+enum InitialTerrainShape
+{
+	InitialTerrainShape_Hat,
+	//InitialTerrainShape_Cone,
+	InitialTerrainShape_FBM,
+	InitialTerrainShape_Perlin
+};
+
+const char* InitialTerrainShape_strings[] = 
+{
+	"hat",
+	//"cone",
+	"FBM",
+	"Perlin noise"
+};
+
+
+OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* opengl_engine, HeightFieldShow cur_heightfield_show) 
 {
 	/*
 	y
@@ -307,9 +356,9 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 		const float dx = 1.f;
 		const float dy = 1.f;
 
-		const float z    = sim.terrain_state.elem(x, y).height + sim.terrain_state.elem(x, y).water;
-		const float z_dx = sim.terrain_state.elem(myMin(vert_res - 1, x + 1), y).height + sim.terrain_state.elem(myMin(vert_res - 1, x + 1), y).water;
-		const float z_dy = sim.terrain_state.elem(x, myMin(vert_res - 1, y + 1)).height + sim.terrain_state.elem(x, myMin(vert_res - 1, y + 1)).water;
+		const float z    = sim.terrain_state.elem(x, y).height                          + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(x, y).water : 0);
+		const float z_dx = sim.terrain_state.elem(myMin(vert_res - 1, x + 1), y).height + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(myMin(vert_res - 1, x + 1), y).water : 0);
+		const float z_dy = sim.terrain_state.elem(x, myMin(vert_res - 1, y + 1)).height + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(x, myMin(vert_res - 1, y + 1)).water : 0);
 
 		const Vec3f p_dx_minus_p(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
 		const Vec3f p_dy_minus_p(0, dy, z_dy - z);
@@ -368,7 +417,12 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 }
 
 
-void updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture)
+struct UpdateTexResults
+{
+	float max_value;
+};
+	
+UpdateTexResults updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture, TextureShow cur_texture_show, float tex_display_max_val)
 {
 	//const int W = sim.state1.getWidth();
 	//const int H = sim.state1.getHeight();
@@ -381,6 +435,17 @@ void updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture)
 		printVar(water_h);
 	}*/
 
+	//conPrint("--------------------");
+	//for(int x=0; x<W; ++x)
+	//{
+	//	const int y = H/2;
+	//	const float suspended = sim.terrain_state.elem(x, y).suspended;
+	//	const float water_h = sim.terrain_state.elem(x, y).water;
+	//	const float water_speed = sqrt(Maths::square(sim.terrain_state.elem(x, y).u) + Maths::square(sim.terrain_state.elem(x, y).v));
+	//	const float flux_R = sim.flow_state.elem(x, y).f_R;
+	//	conPrint("x=" + toString(x) + ",y=" + toString(H/2) + ", suspended: " + toString(suspended) + ", water_h: " + toString(water_h) + ", water_speed: " + toString(water_speed) + ", flux_R: " + toString(flux_R));
+	//}
+
 	/*conPrint("--------------------");
 	for(int x=0; x<W; ++x)
 	{
@@ -391,35 +456,62 @@ void updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture)
 		const float water_h = sim.terrain_state.elem(x, y).water;
 		printVar(water_h);
 	}*/
+	UpdateTexResults results;
+	results.max_value = 0;
 
-	for(int y=0; y<H; ++y)
-	for(int x=0; x<W; ++x)
+
+	if(cur_texture_show == TextureShow_WaterDepth)
 	{
-		const float water_h = sim.terrain_state.elem(x, y).water;
-		//const float sediment_h = sim.terrain_state.elem(x, y).suspended;
-		//const float water_speed = sqrt(Maths::square(sim.terrain_state.elem(x, y).u) + Maths::square(sim.terrain_state.elem(x, y).v));
+		float max_water_h = 0;
+		for(int y=0; y<H; ++y)
+		for(int x=0; x<W; ++x)
+		{
+			const float water_h = sim.terrain_state.elem(x, y).water;
+			max_water_h = myMax(max_water_h, water_h);
+			const float water_val = myMax(0.0f, water_h / tex_display_max_val);
 
-		const float water_val = myMax(0.0f, water_h * 100.f);
+			tex_data[(y*W + x)*3 + 0] = 0;
+			tex_data[(y*W + x)*3 + 1] = 0;
+			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(water_val * 255), 0, 255);
+		}
+		results.max_value = max_water_h;
+	}
+	else if(cur_texture_show == TextureShow_WaterSpeed)
+	{
+		float max_water_speed = 0;
+		for(int y=0; y<H; ++y)
+		for(int x=0; x<W; ++x)
+		{
+			const float water_speed = sqrt(Maths::square(sim.terrain_state.elem(x, y).u) + Maths::square(sim.terrain_state.elem(x, y).v));
+			max_water_speed = myMax(max_water_speed, water_speed);
+			const float water_speed_val = water_speed / tex_display_max_val;
 
-		//assert(sediment_h >= 0);
-		//const float sediment_val = sediment_h * 10.f;
+			tex_data[(y*W + x)*3 + 0] = 0;
+			tex_data[(y*W + x)*3 + 1] = 0;
+			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(0 + water_speed_val * 255), 0, 255);
+		}
+		results.max_value = max_water_speed;
+	}
+	else if(cur_texture_show == TextureShow_SuspendedSediment)
+	{
+		float max_suspended = 0;
+		for(int y=0; y<H; ++y)
+		for(int x=0; x<W; ++x)
+		{
+			const float sediment_h = sim.terrain_state.elem(x, y).suspended;
+			max_suspended = myMax(max_suspended, sediment_h);
+			const float sediment_val = sediment_h / tex_display_max_val;
 
-		//const float water_speed_val = water_speed * 0.1f;
-
-		tex_data[(y*W + x)*3 + 0] = 100;
-		tex_data[(y*W + x)*3 + 1] = 100;
-		tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(100 + water_val * 255), 0, 255);
-
-		/*tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(100 + sediment_val * 255), 0, 255);
-		tex_data[(y*W + x)*3 + 1] = 100;
-		tex_data[(y*W + x)*3 + 2] = 100;*/
-
-		/*tex_data[(y*W + x)*3 + 0] = 100;
-		tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(100 + water_speed_val * 255), 0, 255);;
-		tex_data[(y*W + x)*3 + 2] = 100;*/
+			tex_data[(y*W + x)*3 + 0] = 0;
+			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 2] = 0;
+		}
+		results.max_value = max_suspended;
 	}
 
 	texture->loadIntoExistingTexture(/*mipmap level=*/0, sim.terrain_state.getHeight(), sim.terrain_state.getWidth(), /*row stride B=*/sim.terrain_state.getWidth()*3, tex_data, /*bind needed=*/true);
+
+	return results;
 }
 
 
@@ -434,7 +526,7 @@ void setGLAttribute(SDL_GLattr attr, int value)
 }
 
 
-void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue)
+void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialTerrainShape initial_terrain_shape)
 {
 	sim.sim_iteration = 0;
 
@@ -452,20 +544,47 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue)
 
 	sim.flow_state.setAllElems(flow_state);
 
-
-	for(int x=0; x<W; ++x)
-	for(int y=0; y<H; ++y)
+	if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_Hat)
 	{
-		float nx = (float)x / W;
-		float ny = (float)y / H;
+		for(int x=0; x<W; ++x)
+		for(int y=0; y<H; ++y)
+		{
+			float nx = (float)x / W;
+			const float tent = (nx < 0.5) ? nx : (1.0f - nx);
+			sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * 200.f;
+		}
+	}
+	else if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_FBM)
+	{
+		for(int x=0; x<W; ++x)
+		for(int y=0; y<H; ++y)
+		{
+			float nx = (float)x / W;
+			float ny = (float)y / H;
 
-		//sim.terrain_state.elem(x, y).height = (-nx*nx + nx) * 200.0f;
-		const float r = Vec2f((float)x, (float)y).getDist(Vec2f((float)W/2, (float)H/2));
+			//sim.terrain_state.elem(x, y).height = (-nx*nx + nx) * 200.0f;
+			//const float r = Vec2f((float)x, (float)y).getDist(Vec2f((float)W/2, (float)H/2));
 
-		//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
+			//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
 
-		const float perlin_factor = PerlinNoise::FBM(nx * 1.f, ny * 1.f, 10) + 1.f;
-		sim.terrain_state.elem(x, y).height = perlin_factor * 100.f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
+			const float perlin_factor = PerlinNoise::FBM(nx * 1.f, ny * 1.f, 10) + 1.f;
+			sim.terrain_state.elem(x, y).height = perlin_factor * 100.f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
+			//sim.terrain_state.elem(x, y).height = nx < 0.25 ? 0 : (nx < 0.5 ? (nx - 0.25) : (1.0f - (nx-0.25)) * 200.f;
+			//const float tent = (nx < 0.5) ? nx : (1.0f - nx);
+			//sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * 200.f;
+		}
+	}
+	else if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_Perlin)
+	{
+		for(int x=0; x<W; ++x)
+		for(int y=0; y<H; ++y)
+		{
+			float nx = (float)x / W;
+			float ny = (float)y / H;
+
+			const float perlin_factor = PerlinNoise::noise(nx * 1.f, ny * 1.f) + 1.f;
+			sim.terrain_state.elem(x, y).height = perlin_factor * 100.f;
+		}
 	}
 
 	sim.terrain_state_buffer.copyFrom(command_queue, /*src ptr=*/&sim.terrain_state.elem(0, 0), /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
@@ -529,18 +648,20 @@ int main(int, char**)
 		Constants constants;
 		constants.delta_t = 0.001f; // time step
 		constants.r = 0.012f; // rainfall rate
-		constants.A = 20; // cross-sectional 'pipe' area
+		constants.A = 1; // cross-sectional 'pipe' area
 		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
 		constants.l = 1.0; // l = pipe length
 		constants.l_x = 1; // width between grid points in x direction
 		constants.l_y = 1;
 
 		constants.K_c = 0.01f; // sediment capacity constant
-		constants.K_s = 0.01f; // dissolving constant.
-		constants.K_d = 0.01f; // deposition constant
+		constants.K_s = 0.1f; // dissolving constant.
+		constants.K_d = 0.1f; // deposition constant
 		constants.K_dmax = 1.f;
 		constants.K_e = 1.0; // Evaporation constant
 		constants.K_t = 1.0; // Thermal erosion constant
+		constants.max_talus_angle = Maths::pi<float>()/4;
+		constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
 
 		sim.terrain_state_buffer.alloc(opencl_context, /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
 		sim.flow_state_buffer_a.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
@@ -557,7 +678,7 @@ int main(int, char**)
 		sim.evaporationKernel = new OpenCLKernel(program, "evaporationKernel", opencl_device->opencl_device_id, profile);
 		
 
-		resetTerrain(sim, command_queue);
+		
 
 
 		//int primary_W = 1680;
@@ -655,12 +776,24 @@ int main(int, char**)
 
 		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), OpenGLTexture::Format_SRGB_Uint8, OpenGLTexture::Filtering_Bilinear);
 
+		InitialTerrainShape initial_terrain_shape = InitialTerrainShape::InitialTerrainShape_Perlin;
+		HeightFieldShow cur_heightfield_show = HeightFieldShow::HeightFieldShow_TerrainOnly;
+		TextureShow cur_texture_show = TextureShow::TextureShow_WaterDepth;
+		float tex_display_max_val = 1;
+
+
+
+		resetTerrain(sim, command_queue, initial_terrain_shape);
+
+
 		// Add terrain object
 		GLObjectRef terrain_gl_ob = new GLObject();
 		terrain_gl_ob->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(0.002f);
-		terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr());
+		terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cur_heightfield_show);
 
-		updateTerrainTexture(sim, terrain_col_tex);
+		
+
+		UpdateTexResults results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
 
 		terrain_gl_ob->materials.resize(1);
 		terrain_gl_ob->materials[0].albedo_linear_rgb = Colour3f(0.5f, 0.6f, 0.5f);
@@ -676,6 +809,11 @@ int main(int, char**)
 		float cam_theta = 1.f;
 		Vec4f cam_target_pos = Vec4f(0,0,0,1);
 		float cam_dist = 4;
+
+		bool sim_running = true;
+		
+
+		
 
 		bool quit = false;
 		while(!quit)
@@ -721,43 +859,119 @@ int main(int, char**)
 
 			//ImGui::ShowDemoWindow();
 
-			ImGui::SetNextWindowSize(ImVec2(600, 500));
+			ImGui::SetNextWindowSize(ImVec2(600, 700));
 			ImGui::Begin("TerrainGen");
 
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation parameters");
 			bool param_changed = false;
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
+			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
+			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/4.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle (rad) ", /*val=*/&constants.max_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
+
+			ImGui::Dummy(ImVec2(100, 40));
+			ImGui::TextColored(ImVec4(1,1,0,1), "Visualisation");
+
+			if(ImGui::BeginCombo("heightfield showing", HeightFieldShow_strings[cur_heightfield_show]))
+			{
+				for(int i=0; i<staticArrayNumElems(HeightFieldShow_strings); ++i)
+				{
+					const bool selected = cur_heightfield_show == i;
+					if(ImGui::Selectable(HeightFieldShow_strings[i], selected))
+						cur_heightfield_show = (HeightFieldShow)i;
+
+					if(selected)
+						ImGui::SetItemDefaultFocus();
+				}
+
+				ImGui::EndCombo();
+			}
+
+			if(ImGui::BeginCombo("texture showing", TextureShow_strings[cur_texture_show]))
+			{
+				for(int i=0; i<staticArrayNumElems(TextureShow_strings); ++i)
+				{
+					const bool selected = cur_texture_show == i;
+					if(ImGui::Selectable(TextureShow_strings[i], selected))
+						cur_texture_show = (TextureShow)i;
+					if(selected)
+						ImGui::SetItemDefaultFocus();
+				}
+
+				ImGui::EndCombo();
+			}
+
+			ImGui::SliderFloat(/*label=*/"Texture display max val", /*val=*/&tex_display_max_val, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation control");
+			
+
+			bool do_advance = false;
+			if(sim_running)
+			{
+				do_advance = true;
+				if(ImGui::Button("pause"))
+					sim_running = false;
+			}
+			else // Else if paused:
+			{
+				if(ImGui::Button("resume"))
+					sim_running = true;
+
+				const bool single_step = ImGui::Button("single step");
+				if(single_step)
+					do_advance = true;
+			}
+			
+			if(do_advance)
+				sim.doSimIteration(command_queue);
+
+			ImGui::Dummy(ImVec2(100, 20));
+			if(ImGui::BeginCombo("initial heightfield shape", InitialTerrainShape_strings[initial_terrain_shape]))
+			{
+				for(int i=0; i<staticArrayNumElems(InitialTerrainShape_strings); ++i)
+				{
+					const bool selected = initial_terrain_shape == i;
+					if(ImGui::Selectable(InitialTerrainShape_strings[i], selected))
+						initial_terrain_shape = (InitialTerrainShape)i;
+					if(selected)
+						ImGui::SetItemDefaultFocus();
+				}
+
+				ImGui::EndCombo();
+			}
+
+			ImGui::Dummy(ImVec2(100, 20));
 			const bool reset = ImGui::Button("Reset terrain");
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Info");
-			ImGui::Text(("sim iteration: " + toString(sim.sim_iteration)).c_str());
-
-			ImGui::End();
+			ImGui::Text((std::string(sim_running ? "Sim running" : "Sim paused") + ", iteration: " + toString(sim.sim_iteration)).c_str());
+			
+			ImGui::Text(("max texture value: " + toString(results.max_value)).c_str());
+			ImGui::End(); 
 
 			if(reset)
 			{
-				resetTerrain(sim, command_queue);
+				resetTerrain(sim, command_queue, initial_terrain_shape);
 			}
 			if(param_changed)
 			{
 				sim.constants_buffer.copyFrom(command_queue, &constants, sizeof(Constants), /*blocking write=*/true);
 			}
 
-			sim.doSimIteration(command_queue);
+			
 
 			// Update terrain object
 			if(time_since_mesh_update.elapsed() > 0.1)
@@ -767,11 +981,11 @@ int main(int, char**)
 				opengl_engine->removeObject(terrain_gl_ob);
 				terrain_gl_ob = NULL;
 
-				updateTerrainTexture(sim, terrain_col_tex);
+				results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
 
 				terrain_gl_ob = new GLObject();
 				terrain_gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, 0.01f) * Matrix4f::uniformScaleMatrix(0.002f);
-				terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr());
+				terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cur_heightfield_show);
 
 
 				terrain_gl_ob->materials.resize(1);
@@ -783,6 +997,10 @@ int main(int, char**)
 				time_since_mesh_update.reset();
 			}
 
+
+			
+
+			
 
 			
 			ImGui::Render();
