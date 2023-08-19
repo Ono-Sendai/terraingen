@@ -295,7 +295,8 @@ __kernel void waterAndVelFieldUpdateKernel(
 	// m^3 = s * (m^3 s^-1)
 
 	//    m   = m   + m^3     / (m               * m)
-	float d_2 = d_1 + delta_V / (constants->l_x * constants->l_y); // Eqn. 7: new water height for middle cell: change in height = change in volume / cell area
+	float d_2 = max(0.f, d_1 + delta_V / (constants->l_x * constants->l_y)); // Eqn. 7: new water height for middle cell: change in height = change in volume / cell area.  
+	// Also make sure water level doesn't become negative.
 
 	// Eqn 8.  Compute average amount of water passing through cell (x, y) in the x direction:
 	// m^3 s^-1     = m^3 s^-1
@@ -314,17 +315,25 @@ __kernel void waterAndVelFieldUpdateKernel(
 
 	//float max_speed_comp = 1.f;
 
-	// From eqn. 9:
-	//m^s-1 = m^3 s^-1  / (m     * m)
-	float new_u = delta_W_x / (d_bar * constants->l_x); // u_{t+delta_t}
-	float new_v = delta_W_y / (d_bar * constants->l_y); // v_{t+delta_t}
+	float u, v;
+	if(d_bar <= 1.0e-4f) // If the water height is ~= 0, then avoid divide by zero below and consider the water velocity to be zero.
+	{
+		u = v = 0;
+	}
+	else
+	{
+		// From eqn. 9:
+		//m^s-1 = m^3 s^-1  / (m     * m)
+		float new_u = delta_W_x / (d_bar * constants->l_x); // u_{t+delta_t}
+		float new_v = delta_W_y / (d_bar * constants->l_y); // v_{t+delta_t}
 
-	const float old_u = terrain_state_middle->u;
-	const float old_v = terrain_state_middle->v;
+		const float old_u = terrain_state_middle->u;
+		const float old_v = terrain_state_middle->v;
 
-	// TEMP HACK:
-	float u = old_u * 0.8f + new_u * 0.1f;
-	float v = old_v * 0.8f + new_v * 0.1f;
+		// TEMP HACK:
+		u = old_u * 0.8f + new_u * 0.1f;
+		v = old_v * 0.8f + new_v * 0.1f;
+	}
 	 
 	//float u = delta_W_x / (d_bar * constants->l_x); // u_{t+delta_t}
 	//float v = delta_W_y / (d_bar * constants->l_y); // v_{t+delta_t}
@@ -364,7 +373,7 @@ __kernel void waterAndVelFieldUpdateKernel(
 }
 
 
-// Updates height, water, suspended in terrain_state
+// Updates 'height', 'suspended' in terrain_state
 __kernel void erosionAndDepositionKernel(
 	__global       TerrainState* restrict const terrain_state, 
 	__global Constants* restrict const constants
@@ -401,6 +410,7 @@ __kernel void erosionAndDepositionKernel(
 	///float sin_alpha = alpha;
 	//sin_alpha = min(0.5f, sin_alpha);
 	const float use_sin_alpha = max(0.1f, sin_alpha);
+
 	float v_len = sqrt(square(state_middle->u) + square(state_middle->v));
 
 	// Compute l_max as a function of water height (d)  (eqn. 10 from 'Fast Hydraulic and Thermal Erosion on the GPU')
@@ -426,7 +436,7 @@ __kernel void erosionAndDepositionKernel(
 			
 	const float b_t = state_middle->height;
 	const float s_t = state_middle->suspended;
-	const float d_2 = state_middle->water;
+	//const float d_2 = state_middle->water;
 	float b_new, s_1/*, d_3*/;
 	if(C > s_t) // suspended amount is smaller than transport capacity, dissolve soil into water:
 	{
@@ -449,7 +459,7 @@ __kernel void erosionAndDepositionKernel(
 	//	printf("s_t:  %1.15f   , C: %1.15f   \n", s_t, C);
 
 	state_middle->height = b_new;
-	state_middle->water = d_2;
+	//state_middle->water = d_2;
 	state_middle->suspended = s_1;
 }
 
