@@ -575,8 +575,8 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 
 			//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
 
-			const float perlin_factor = PerlinNoise::FBM(nx * 1.f, ny * 1.f, 10) + 1.f;
-			sim.terrain_state.elem(x, y).height = perlin_factor * W / 5.0f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
+			const float perlin_factor = PerlinNoise::FBM(nx * 3.f, ny * 3.f, 10);
+			sim.terrain_state.elem(x, y).height = myMax(0.f, perlin_factor)/3.f * W / 5.0f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
 			//sim.terrain_state.elem(x, y).height = nx < 0.25 ? 0 : (nx < 0.5 ? (nx - 0.25) : (1.0f - (nx-0.25)) * 200.f;
 			//const float tent = (nx < 0.5) ? nx : (1.0f - nx);
 			//sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * 200.f;
@@ -654,7 +654,7 @@ int main(int, char**)
 		}
 
 		Constants constants;
-		constants.delta_t = 0.001f; // time step
+		constants.delta_t = 0.01f; // time step
 		constants.r = 0.012f; // rainfall rate
 		constants.A = 1; // cross-sectional 'pipe' area
 		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
@@ -662,12 +662,12 @@ int main(int, char**)
 		constants.l_x = 1; // width between grid points in x direction
 		constants.l_y = 1;
 
-		constants.K_c = 0.01f; // sediment capacity constant
-		constants.K_s = 0.1f; // dissolving constant.
-		constants.K_d = 0.1f; // deposition constant
+		constants.K_c = 0.5f; // sediment capacity constant
+		constants.K_s = 0.5f; // dissolving constant.
+		constants.K_d = 0.5f; // deposition constant
 		constants.K_dmax = 1.f;
-		constants.K_e = 1.0; // Evaporation constant
-		constants.K_t = 1.0; // Thermal erosion constant
+		constants.K_e = 0.3f; // Evaporation constant
+		constants.K_t = 0.1f; // Thermal erosion constant
 		constants.max_talus_angle = Maths::pi<float>()/4;
 		constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
 
@@ -815,10 +815,10 @@ int main(int, char**)
 
 		TerrainStats stats = computeTerrainStats(sim);
 
-		float cam_phi = 0;
+		float cam_phi = 0.7f;
 		float cam_theta = 1.f;
-		Vec4f cam_target_pos = Vec4f(0,0,0,1);
-		float cam_dist = 4;
+		Vec4f cam_target_pos = Vec4f(0.5f,0.5f,0,1);
+		float cam_dist = 2;
 
 		bool sim_running = true;
 		
@@ -874,7 +874,7 @@ int main(int, char**)
 
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation parameters");
 			bool param_changed = false;
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
@@ -884,7 +884,7 @@ int main(int, char**)
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/2.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle (rad) ", /*val=*/&constants.max_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
 			constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
 
