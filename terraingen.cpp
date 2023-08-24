@@ -808,8 +808,20 @@ int main(int, char**)
 		if(devices.empty())
 			throw glare::Exception("No OpenCL devices found");
 
-		OpenCLDeviceRef opencl_device = devices[0]; // Just use first device for now.
+		// Use first GPU device for now
+		OpenCLDeviceRef opencl_device;
+		for(size_t i=0; i<devices.size(); ++i)
+		{
+			if(devices[i]->opencl_device_type == CL_DEVICE_TYPE_GPU)
+			{
+				opencl_device = devices[i];
+				break;
+			}
+		}
 
+		if(opencl_device.isNull())
+			throw glare::Exception("No OpenCL GPU devices found");
+			
 		OpenCLContextRef opencl_context = new OpenCLContext(opencl_device, /*enable opengl interop=*/true);
 
 		std::vector<OpenCLDeviceRef> devices_to_build_for(1, opencl_device);
