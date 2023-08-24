@@ -40,16 +40,12 @@ Copyright Nicholas Chapman 2023 -
 #include <string>
 
 
-const int W = 512;
-const int H = 512;
-
-
 typedef struct
 {
 	float height; // terrain height (b)
 	float water; // water height (d)
-	float suspended; // Amount of suspended sediment. (s)
-
+	float suspended;
+	float deposited_sed;
 	float u, v; // velocity
 
 } TerrainState;
@@ -58,7 +54,7 @@ typedef struct
 typedef struct
 {
 	float f_L, f_R, f_T, f_B; // outflow flux
-
+	float sed_f_L, sed_f_R, sed_f_T, sed_f_B;
 } FlowState;
 
 typedef struct
@@ -75,6 +71,7 @@ typedef struct
 	float A; // cross-sectional 'pipe' area
 	float g; // gravity accel magnitude. positive.
 	float l; // virtual pipe length
+	float f; // fricton constant
 	float l_x; // width between grid points in x direction
 	float l_y;
 
@@ -85,8 +82,11 @@ typedef struct
 	float K_e; // Evaporation constant
 
 	float K_t; // thermal erosion constant
+	float K_tdep; // thermal erosion constant for deposited sediment
 	float max_talus_angle;
 	float tan_max_talus_angle;
+	float max_deposited_talus_angle;
+	float tan_max_deposited_talus_angle;
 } Constants;
 
 
@@ -94,6 +94,7 @@ class Simulation
 {
 public:
 	int sim_iteration;
+	int W, H;
 
 	Array2D<TerrainState> terrain_state;
 	Array2D<FlowState> flow_state;
@@ -102,11 +103,14 @@ public:
 
 	OpenCLKernelRef flowSimulationKernel;
 	OpenCLKernelRef thermalErosionFluxKernel;
+	OpenCLKernelRef thermalErosionDepositedFluxKernel;
 	OpenCLKernelRef waterAndVelFieldUpdateKernel;
 	OpenCLKernelRef erosionAndDepositionKernel;
 	OpenCLKernelRef sedimentTransportationKernel;
 	OpenCLKernelRef thermalErosionMovementKernel;
+	OpenCLKernelRef thermalErosionDepositedMovementKernel;
 	OpenCLKernelRef evaporationKernel;
+	OpenCLKernelRef setHeightFieldMeshKernel;
 
 	OpenCLBuffer terrain_state_buffer;
 	OpenCLBuffer flow_state_buffer_a;
@@ -114,10 +118,18 @@ public:
 	OpenCLBuffer thermal_erosion_state_buffer;
 	OpenCLBuffer constants_buffer;
 
+	cl_mem heightfield_mesh_buffer;
+	uint32 heightfield_mesh_offset_B;
+	cl_mem terrain_tex_cl_mem;
+
+
 	Timer timer;
 
-	Simulation()
+	Simulation(int W_, int H_)
 	{
+		W = W_;
+		H = H_;
+
 		sim_iteration = 0;
 
 		terrain_state.resize(W, H);
@@ -140,7 +152,7 @@ public:
 		OpenCLBuffer* cur_flow_state_buffer   = &flow_state_buffer_a;
 		OpenCLBuffer* other_flow_state_buffer = &flow_state_buffer_b;
 
-		const int num_iters = 10; // Should be even so that we end up with cur_flow_state_buffer == flow_state_buffer_a
+		const int num_iters = 2; // Should be even so that we end up with cur_flow_state_buffer == flow_state_buffer_a
 		for(int z=0; z<num_iters; ++z)
 		{
 			flowSimulationKernel->setKernelArgBuffer(0, terrain_state_buffer);
@@ -154,7 +166,7 @@ public:
 			thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
 			thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
-			thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);  // Swap pointers
+			thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
 			waterAndVelFieldUpdateKernel->setKernelArgBuffer(0, *cur_flow_state_buffer);
 			waterAndVelFieldUpdateKernel->setKernelArgBuffer(1, terrain_state_buffer);
@@ -174,6 +186,16 @@ public:
 			thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
 			thermalErosionMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
+			thermalErosionDepositedFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
+			thermalErosionDepositedFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
+			thermalErosionDepositedFluxKernel->setKernelArgBuffer(2, constants_buffer);
+			thermalErosionDepositedFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+			thermalErosionDepositedMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
+			thermalErosionDepositedMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
+			thermalErosionDepositedMovementKernel->setKernelArgBuffer(2, constants_buffer);
+			thermalErosionDepositedMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
 			evaporationKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			evaporationKernel->setKernelArgBuffer(1, constants_buffer);
 			evaporationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
@@ -182,6 +204,27 @@ public:
 		assert(cur_flow_state_buffer == &flow_state_buffer_a);
 
 		sim_iteration += num_iters;
+	}
+
+	void updateHeightFieldMeshAndTexture(OpenCLCommandQueueRef command_queue)
+	{
+		const cl_mem mem_objects[] = { heightfield_mesh_buffer, terrain_tex_cl_mem };
+		::getGlobalOpenCL()->clEnqueueAcquireGLObjects(command_queue->getCommandQueue(),
+			/*num objects=*/staticArrayNumElems(mem_objects), /*mem objects=*/mem_objects, /*num objects in wait list=*/0, /*event wait list=*/NULL, /*event=*/NULL);
+		
+		setHeightFieldMeshKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		setHeightFieldMeshKernel->setKernelArgBuffer(1, constants_buffer);
+		setHeightFieldMeshKernel->setKernelArgBuffer(2, heightfield_mesh_buffer);
+		setHeightFieldMeshKernel->setKernelArgUInt(3, heightfield_mesh_offset_B);
+		setHeightFieldMeshKernel->setKernelArgBuffer(4, terrain_tex_cl_mem);
+		
+		setHeightFieldMeshKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+		::getGlobalOpenCL()->clEnqueueReleaseGLObjects(command_queue->getCommandQueue(),
+			/*num objects=*/staticArrayNumElems(mem_objects), /*mem objects=*/mem_objects, /*num objects in wait list=*/0, /*event wait list=*/NULL, /*event=*/NULL);
+
+		command_queue->finish(); // Make sure we have finished writing to the vertex buffer and texture before we start issuing new OpenGL commands.
+		// TODO: work out a better way of syncing (e.g. with barrier).
 	}
 };
 
@@ -215,34 +258,44 @@ enum TextureShow
 {
 	TextureShow_WaterDepth,
 	TextureShow_WaterSpeed,
-	TextureShow_SuspendedSediment
+	TextureShow_SuspendedSediment,
+	TextureShow_DepositedSediment
 };
 const char* TextureShow_strings[] = 
 {
 	"water depth",
 	"water speed",
-	"suspended sediment"
+	"suspended sediment",
+	"deposited sediment"
 };
 
 
 enum InitialTerrainShape
 {
+	InitialTerrainShape_ConstantSlope,
 	InitialTerrainShape_Hat,
-	//InitialTerrainShape_Cone,
+	InitialTerrainShape_Cone,
 	InitialTerrainShape_FBM,
 	InitialTerrainShape_Perlin
 };
 
 const char* InitialTerrainShape_strings[] = 
 {
+	"constant slope",
 	"hat",
-	//"cone",
+	"cone",
 	"FBM",
 	"Perlin noise"
 };
 
 
-OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* opengl_engine, HeightFieldShow cur_heightfield_show) 
+inline float totalTerrainHeight(const TerrainState& state)
+{
+	return state.height + state.deposited_sed;//state.sediment[0] + state.sediment[1] + state.sediment[2];
+}
+
+
+OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* opengl_engine, HeightFieldShow /*cur_heightfield_show*/) 
 {
 	/*
 	y
@@ -267,19 +320,25 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 	|----|----|----|----|---> x
 	*/
 
-	const float chunk_w = (float)sim.terrain_state.getWidth();
-
-	int vert_res = (int)sim.terrain_state.getWidth();
-	int quad_res = vert_res - 1; // Number of quads in x and y directions
+	int vert_xres = myMax(2, (int)sim.terrain_state.getWidth());
+	int vert_yres = myMax(2, (int)sim.terrain_state.getHeight());
+	int quad_xres = vert_xres - 1; // Number of quads in x and y directions
+	int quad_yres = vert_yres - 1; // Number of quads in x and y directions
 	
-	float quad_w = chunk_w / quad_res; // Width in metres of each quad
+	float quad_w_x = 1.f;//(float)sim.terrain_state.getWidth() / quad_xres; // Width in metres of each quad
+	float quad_w_y = quad_w_x;
+	if(sim.terrain_state.getHeight() <= 10)
+	{
+		quad_w_y *= 20.f; // For height = 1 (1-d debugging case), display strip a bit wider
+	}
 
-	const size_t normal_size_B = 4;
+	//const size_t normal_size_B = 4;
+	const size_t normal_size_B = sizeof(float) * 3;
 	const size_t vert_size_B = sizeof(float) * (3 + 2) + normal_size_B; // position, normal, uv
 	OpenGLMeshRenderDataRef mesh_data = new OpenGLMeshRenderData();
-	mesh_data->vert_data.resize(vert_size_B * vert_res * vert_res);
+	mesh_data->vert_data.resize(vert_size_B * vert_xres * vert_yres);
 
-	mesh_data->vert_index_buffer.resize(quad_res * quad_res * 6);
+	mesh_data->vert_index_buffer.resize(quad_xres * quad_yres * 6);
 
 	OpenGLMeshRenderData& meshdata = *mesh_data;
 
@@ -306,11 +365,20 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 	meshdata.vertex_spec.attributes.push_back(pos_attrib);
 	in_vert_offset_B += sizeof(float) * 3;
 
+	//VertexAttrib normal_attrib;
+	//normal_attrib.enabled = true;
+	//normal_attrib.num_comps = 4; // 3;
+	//normal_attrib.type = GL_INT_2_10_10_10_REV; // GL_FLOAT;
+	//normal_attrib.normalised = true; // false;
+	//normal_attrib.stride = vert_size_B;
+	//normal_attrib.offset = (uint32)in_vert_offset_B;
+	//meshdata.vertex_spec.attributes.push_back(normal_attrib);
+	//in_vert_offset_B += normal_size_B;
 	VertexAttrib normal_attrib;
 	normal_attrib.enabled = true;
-	normal_attrib.num_comps = 4; // 3;
-	normal_attrib.type = GL_INT_2_10_10_10_REV; // GL_FLOAT;
-	normal_attrib.normalised = true; // false;
+	normal_attrib.num_comps = 3;
+	normal_attrib.type = GL_FLOAT;
+	normal_attrib.normalised = false;
 	normal_attrib.stride = vert_size_B;
 	normal_attrib.offset = (uint32)in_vert_offset_B;
 	meshdata.vertex_spec.attributes.push_back(normal_attrib);
@@ -329,47 +397,43 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 
 	assert(in_vert_offset_B == vert_size_B);
 
-	js::AABBox aabb_os = js::AABBox::emptyAABBox();
+	//js::AABBox aabb_os = js::AABBox::emptyAABBox();
 
 	uint8* const vert_data = mesh_data->vert_data.data();
 
-	Timer timer;
+	//Timer timer;
 
-	for(int y=0; y<vert_res; ++y)
-	for(int x=0; x<vert_res; ++x)
+	for(int y=0; y<vert_yres; ++y)
+	for(int x=0; x<vert_xres; ++x)
 	{
-		const float p_x = x * quad_w;
-		const float p_y = y * quad_w;
-		const float dx = 1.f;
-		const float dy = 1.f;
+		const float p_x = x * quad_w_x;
+		const float p_y = y * quad_w_y;
 
-		const float z    = sim.terrain_state.elem(x, y).height                          + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(x, y).water : 0);
-		const float z_dx = sim.terrain_state.elem(myMin(vert_res - 1, x + 1), y).height + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(myMin(vert_res - 1, x + 1), y).water : 0);
-		const float z_dy = sim.terrain_state.elem(x, myMin(vert_res - 1, y + 1)).height + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(x, myMin(vert_res - 1, y + 1)).water : 0);
+		const Vec3f pos(p_x, p_y, 0);
+		std::memcpy(vert_data + vert_size_B * (y * vert_xres + x), &pos, sizeof(float)*3);
 
-		const Vec3f p_dx_minus_p(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
-		const Vec3f p_dy_minus_p(0, dy, z_dy - z);
+		//aabb_os.enlargeToHoldPoint(pos.toVec4fPoint());
 
-		const Vec3f normal = normalise(crossProduct(p_dx_minus_p, p_dy_minus_p));
+		const Vec3f normal(0,0,1);
+		std::memcpy(vert_data + vert_size_B * (y * vert_xres + x) + sizeof(float) * 3, &normal, sizeof(float) * 3);
 
-		const Vec3f pos(p_x, p_y, z);
-		std::memcpy(vert_data + vert_size_B * (y * vert_res + x), &pos, sizeof(float)*3);
-
-		aabb_os.enlargeToHoldPoint(pos.toVec4fPoint());
-
-		const uint32 packed_normal = packNormal(normal);
-		std::memcpy(vert_data + vert_size_B * (y * vert_res + x) + sizeof(float) * 3, &packed_normal, sizeof(uint32));
-
-		Vec2f uv((float)x / vert_res, (float)y / vert_res);
-		std::memcpy(vert_data + vert_size_B * (y * vert_res + x) + uv_offset_B, &uv, sizeof(float)*2);
+		Vec2f uv((float)x / vert_xres, (float)y / vert_yres);
+		std::memcpy(vert_data + vert_size_B * (y * vert_xres + x) + uv_offset_B, &uv, sizeof(float)*2);
 	}
 
-	meshdata.aabb_os = aabb_os;
+	// Make AABB bigger in z direction than initial mesh so it encloses displaced geom updated on GPU
+	meshdata.aabb_os = js::AABBox(
+		Vec4f(0,0,-100000.f,1),
+		Vec4f(quad_w_x * quad_xres, quad_w_y * quad_yres, 100000.f, 1)
+	);
+	//meshdata.aabb_os = aabb_os;
+	//meshdata.aabb_os.min_[2] = -100000.f; // Make AABB bigger so encloses displaced geom updated on GPU
+	//meshdata.aabb_os.max_[2] = 100000.f;
 
 
 	uint32* const indices = (uint32*)mesh_data->vert_index_buffer.data();
-	for(int y=0; y<quad_res; ++y)
-	for(int x=0; x<quad_res; ++x)
+	for(int y=0; y<quad_yres; ++y)
+	for(int x=0; x<quad_xres; ++x)
 	{
 		// Trianglulate the quad in this way
 		// |----|
@@ -379,15 +443,15 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 		// |----|--> x
 
 		// bot left tri
-		int offset = (y*quad_res + x) * 6;
-		indices[offset + 0] = y * vert_res + x; // bot left
-		indices[offset + 1] = y * vert_res + x + 1; // bot right
-		indices[offset + 2] = (y + 1) * vert_res + x; // top left
+		int offset = (y*quad_xres + x) * 6;
+		indices[offset + 0] = y * vert_xres + x; // bot left
+		indices[offset + 1] = y * vert_xres + x + 1; // bot right
+		indices[offset + 2] = (y + 1) * vert_xres + x; // top left
 
 		// top right tri
-		indices[offset + 3] = y * vert_res + x + 1; // bot right
-		indices[offset + 4] = (y + 1) * vert_res + x + 1; // top right
-		indices[offset + 5] = (y + 1) * vert_res + x; // top left
+		indices[offset + 3] = y * vert_xres + x + 1; // bot right
+		indices[offset + 4] = (y + 1) * vert_xres + x + 1; // top right
+		indices[offset + 5] = (y + 1) * vert_xres + x; // top left
 	}
 
 	//conPrint("Creating mesh took           " + timer.elapsedStringMSWIthNSigFigs(4));
@@ -407,18 +471,30 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 struct TerrainStats
 {
 	float total_volume;
+	float total_water_volume;
+	float total_suspended_sediment_vol;
+	float total_deposited_sediment_vol;
 };
 
 TerrainStats computeTerrainStats(Simulation& sim)
 {
 	double sum_terrain_h = 0;
-	for(int y=0; y<H; ++y)
-	for(int x=0; x<W; ++x)
+	double sum_water_h = 0;
+	double sum_suspended = 0;
+	double sum_deposited_sediment = 0;
+	for(int y=0; y<sim.H; ++y)
+	for(int x=0; x<sim.W; ++x)
 	{
 		sum_terrain_h += sim.terrain_state.elem(x, y).height;
+		sum_water_h   += sim.terrain_state.elem(x, y).water;
+		sum_suspended += sim.terrain_state.elem(x, y).suspended;//[0] + sim.terrain_state.elem(x, y).suspended[1] + sim.terrain_state.elem(x, y).suspended[2];
+		sum_deposited_sediment  += sim.terrain_state.elem(x, y).deposited_sed;//sediment[0] + sim.terrain_state.elem(x, y).sediment[1] + sim.terrain_state.elem(x, y).sediment[2];
 	}
 	TerrainStats stats;
 	stats.total_volume = (float)sum_terrain_h; // TODO: take into account cell width when != 1.
+	stats.total_water_volume = (float)sum_water_h; // TODO: take into account cell width when != 1.
+	stats.total_suspended_sediment_vol = (float)sum_suspended; // TODO: take into account cell width when != 1.
+	stats.total_deposited_sediment_vol = (float)sum_deposited_sediment; // TODO: take into account cell width when != 1.
 	return stats;
 }
 
@@ -432,8 +508,8 @@ struct UpdateTexResults
 
 UpdateTexResults updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture, TextureShow cur_texture_show, float tex_display_max_val)
 {
-	//const int W = sim.state1.getWidth();
-	//const int H = sim.state1.getHeight();
+	const int W = (int)sim.terrain_state.getWidth();
+	const int H = (int)sim.terrain_state.getHeight();
 	std::vector<uint8> tex_data(W * H * 3);
 
 	/*conPrint("--------------------");
@@ -506,18 +582,67 @@ UpdateTexResults updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture,
 		for(int y=0; y<H; ++y)
 		for(int x=0; x<W; ++x)
 		{
-			const float sediment_h = sim.terrain_state.elem(x, y).suspended;
-			max_suspended = myMax(max_suspended, sediment_h);
-			const float sediment_val = sediment_h / tex_display_max_val;
+			const float sediment = sim.terrain_state.elem(x, y).suspended;
+			max_suspended = myMax(max_suspended, sediment);
+			const float sediment_val = sediment / tex_display_max_val;
 
-			tex_data[(y*W + x)*3 + 0] = 0;
-			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 2] = 0;
+			tex_data[(y*W + x)*3 + 0] = 100;//(uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(100 + sediment_val * (255-100)), 0, 255);
+			tex_data[(y*W + x)*3 + 2] = 100;//(uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
+			/*const float sediment_r = sim.terrain_state.elem(x, y).suspended[0];
+			const float sediment_g = sim.terrain_state.elem(x, y).suspended[1];
+			const float sediment_b = sim.terrain_state.elem(x, y).suspended[2];
+			max_suspended = myMax(max_suspended, sediment_r);
+			max_suspended = myMax(max_suspended, sediment_g);
+			max_suspended = myMax(max_suspended, sediment_b);
+			const float sediment_val_r = sediment_r / tex_display_max_val;
+			const float sediment_val_g = sediment_g / tex_display_max_val;
+			const float sediment_val_b = sediment_b / tex_display_max_val;
+
+			tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(0 + sediment_val_r * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(0 + sediment_val_g * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(0 + sediment_val_b * 255), 0, 255);*/
 		}
 		results.max_value = max_suspended;
 	}
+	else if(cur_texture_show == TextureShow_DepositedSediment)
+	{
+		float max_sediment = 0;
+		for(int y=0; y<H; ++y)
+		for(int x=0; x<W; ++x)
+		{
+			const float sediment = sim.terrain_state.elem(x, y).deposited_sed;
+			max_sediment = myMax(max_sediment, sediment);
+			const float sediment_val = sediment / tex_display_max_val;
 
-	texture->loadIntoExistingTexture(/*mipmap level=*/0, sim.terrain_state.getHeight(), sim.terrain_state.getWidth(), /*row stride B=*/sim.terrain_state.getWidth()*3, tex_data, /*bind needed=*/true);
+			Colour3f base_col = Colour3f(104, 97, 72) / 255.f; // Colour3f(183, 171, 162) / 255.f;
+			Colour3f sediment_col = Colour3f(71, 105, 72)/ 255.f;
+
+			const Colour3f final_col = Maths::lerp(base_col, sediment_col, myClamp(sediment_val, 0.f, 1.f));
+			/*tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 1] = 0;
+			tex_data[(y*W + x)*3 + 2] = 0;*/
+			tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(final_col.r * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(final_col.g * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(final_col.b * 255), 0, 255);
+			/*const float sediment_r = sim.terrain_state.elem(x, y).sediment[0];
+			const float sediment_g = sim.terrain_state.elem(x, y).sediment[1];
+			const float sediment_b = sim.terrain_state.elem(x, y).sediment[2];
+			max_sediment = myMax(max_sediment, sediment_r);
+			max_sediment = myMax(max_sediment, sediment_g);
+			max_sediment = myMax(max_sediment, sediment_b);
+			const float sediment_val_r = sediment_r / tex_display_max_val;
+			const float sediment_val_g = sediment_g / tex_display_max_val;
+			const float sediment_val_b = sediment_b / tex_display_max_val;
+
+			tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(0 + sediment_val_r * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(0 + sediment_val_g * 255), 0, 255);
+			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(0 + sediment_val_b * 255), 0, 255);*/
+		}
+		results.max_value = max_sediment;
+	}
+
+	texture->loadIntoExistingTexture(/*mipmap level=*/0, sim.terrain_state.getWidth(), sim.terrain_state.getHeight(), /*row stride B=*/sim.terrain_state.getWidth()*3, tex_data, /*bind needed=*/true);
 
 	return results;
 }
@@ -534,32 +659,61 @@ void setGLAttribute(SDL_GLattr attr, int value)
 }
 
 
-void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialTerrainShape initial_terrain_shape)
+void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialTerrainShape initial_terrain_shape, float initial_height_scale, float x_scale, float y_scale)
 {
+	const int W = (int)sim.terrain_state.getWidth();
+	const int H = (int)sim.terrain_state.getHeight();
+
 	sim.sim_iteration = 0;
 
 	// Set initial state
 	TerrainState f;
 	f.height = 1.f;
 	f.water = 0.0f;
-	f.suspended = 0.f;
+	f.suspended = 0;
+	f.deposited_sed = 0;
+	//f.suspended[0] = f.suspended[1] = f.suspended[2] = 0.f;
+	//f.sediment[0] = f.sediment[1] = f.sediment[2] = 0.f;
 	f.u = f.v = 0;
 
 	sim.terrain_state.setAllElems(f);
 
 	FlowState flow_state;
 	flow_state.f_L = flow_state.f_R = flow_state.f_T = flow_state.f_B = 0;
+	flow_state.sed_f_L = flow_state.sed_f_R = flow_state.sed_f_T = flow_state.sed_f_B = 0;
 
 	sim.flow_state.setAllElems(flow_state);
 
-	if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_Hat)
+	if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_ConstantSlope)
+	{
+		for(int x=0; x<W; ++x)
+		for(int y=0; y<H; ++y)
+		{
+			float nx = (float)x / W;
+			sim.terrain_state.elem(x, y).height = nx * W / 2.0f * initial_height_scale;
+		}
+	}
+	else if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_Hat)
 	{
 		for(int x=0; x<W; ++x)
 		for(int y=0; y<H; ++y)
 		{
 			float nx = (float)x / W;
 			const float tent = (nx < 0.5) ? nx : (1.0f - nx);
-			sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * W / 2.0f;
+			sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * W / 2.0f * initial_height_scale;
+		}
+	}
+	else if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_Cone)
+	{
+		for(int x=0; x<W; ++x)
+		for(int y=0; y<H; ++y)
+		{
+			float nx = (float)x / W;
+			float ny = (float)y / H;
+			const float r = Vec2f(nx, ny).getDist(Vec2f(0.5f));
+			
+			const float cone = myMax(0.0f, 1 - r*4);
+			sim.terrain_state.elem(x, y).height = cone * W / 4.0f * initial_height_scale;
 		}
 	}
 	else if(initial_terrain_shape == InitialTerrainShape::InitialTerrainShape_FBM)
@@ -575,8 +729,9 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 
 			//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
 
-			const float perlin_factor = PerlinNoise::FBM(nx * 3.f, ny * 3.f, 10);
-			sim.terrain_state.elem(x, y).height = myMax(0.f, perlin_factor)/3.f * W / 5.0f;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
+			const float perlin_factor = PerlinNoise::FBM(nx * x_scale, ny * y_scale, 5);
+			//const float perlin_factor = PerlinNoise::ridgedFBM<float>(Vec4f(nx * 0.5f, ny * 0.5f, 0, 1), 1, 2, 5);
+			sim.terrain_state.elem(x, y).height = myMax(-100.f, perlin_factor)/3.f * W / 5.0f * initial_height_scale;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
 			//sim.terrain_state.elem(x, y).height = nx < 0.25 ? 0 : (nx < 0.5 ? (nx - 0.25) : (1.0f - (nx-0.25)) * 200.f;
 			//const float tent = (nx < 0.5) ? nx : (1.0f - nx);
 			//sim.terrain_state.elem(x, y).height = myMax(0.0f, tent*2 - 0.5f) * 200.f;
@@ -590,8 +745,8 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 			float nx = (float)x / W;
 			float ny = (float)y / H;
 
-			const float perlin_factor = PerlinNoise::noise(nx * 1.f, ny * 1.f) + 1.f;
-			sim.terrain_state.elem(x, y).height = perlin_factor * W / 5.0f;
+			const float perlin_factor = PerlinNoise::noise(nx * x_scale, ny * y_scale) + 1.f;
+			sim.terrain_state.elem(x, y).height = perlin_factor * W / 5.0f * initial_height_scale;
 		}
 	}
 
@@ -605,88 +760,11 @@ int main(int, char**)
 
 	try
 	{
-		Simulation sim;
-		
-		//=========================== Init OpenCL================================
-		OpenCL* opencl = getGlobalOpenCL();
-		if(!opencl)
-			throw glare::Exception("Failed to open OpenCL: " + getGlobalOpenCLLastErrorMsg());
-
-
-		const std::vector<OpenCLDeviceRef> devices = opencl->getOpenCLDevices();
-
-		if(devices.empty())
-			throw glare::Exception("No OpenCL devices found");
-
-		OpenCLDeviceRef opencl_device = devices[0]; // Just use first device for now.
-
-		OpenCLContextRef opencl_context = new OpenCLContext(opencl_device);
-
-		std::vector<OpenCLDeviceRef> devices_to_build_for(1, opencl_device);
-
-		const bool profile = false;
-
-		OpenCLCommandQueueRef command_queue = new OpenCLCommandQueue(opencl_context, opencl_device->opencl_device_id, profile);
-
-		std::string build_log;
-		OpenCLProgramRef program;
-		try
-		{
-			// Prepend some definitions to the source code
-			std::string src = FileUtils::readEntireFile("N:\\terraingen\\trunk\\erosion_kernel.cl");
-			src = 
-				"#define W " + toString(W) + "\n" +
-				"#define H " + toString(H) + "\n" +
-				src;
-
-			program = opencl->buildProgram(
-				src,
-				opencl_context,
-				devices_to_build_for,
-				"-cl-mad-enable", // compile options
-				build_log
-			);
-		}
-		catch(glare::Exception& e)
-		{
-			conPrint("Build log: " + build_log);
-			throw e;
-		}
-
-		Constants constants;
-		constants.delta_t = 0.01f; // time step
-		constants.r = 0.012f; // rainfall rate
-		constants.A = 1; // cross-sectional 'pipe' area
-		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
-		constants.l = 1.0; // l = pipe length
-		constants.l_x = 1; // width between grid points in x direction
-		constants.l_y = 1;
-
-		constants.K_c = 0.5f; // sediment capacity constant
-		constants.K_s = 0.5f; // dissolving constant.
-		constants.K_d = 0.5f; // deposition constant
-		constants.K_dmax = 1.f;
-		constants.K_e = 0.3f; // Evaporation constant
-		constants.K_t = 0.1f; // Thermal erosion constant
-		constants.max_talus_angle = Maths::pi<float>()/4;
-		constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
-
-		sim.terrain_state_buffer.alloc(opencl_context, /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
-		sim.flow_state_buffer_a.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
-		sim.flow_state_buffer_b.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
-		sim.thermal_erosion_state_buffer.alloc(opencl_context, W * H * sizeof(ThermalErosionState), CL_MEM_READ_WRITE);
-		sim.constants_buffer.allocFrom(opencl_context, &constants, sizeof(Constants), CL_MEM_READ_ONLY);
-
-		sim.flowSimulationKernel = new OpenCLKernel(program, "flowSimulationKernel", opencl_device->opencl_device_id, profile);
-		sim.thermalErosionFluxKernel = new OpenCLKernel(program, "thermalErosionFluxKernel", opencl_device->opencl_device_id, profile);
-		sim.waterAndVelFieldUpdateKernel = new OpenCLKernel(program, "waterAndVelFieldUpdateKernel", opencl_device->opencl_device_id, profile);
-		sim.erosionAndDepositionKernel = new OpenCLKernel(program, "erosionAndDepositionKernel", opencl_device->opencl_device_id, profile);
-		sim.sedimentTransportationKernel = new OpenCLKernel(program, "sedimentTransportationKernel", opencl_device->opencl_device_id, profile);
-		sim.thermalErosionMovementKernel = new OpenCLKernel(program, "thermalErosionMovementKernel", opencl_device->opencl_device_id, profile);
-		sim.evaporationKernel = new OpenCLKernel(program, "evaporationKernel", opencl_device->opencl_device_id, profile);
-		
-
-		
+		//=========================== Init SDL and OpenGL ================================
+		// NOTE: OpenGL init needs to go before OpenCL init
+		int W = 1024;
+		int H = 1024;
+		Simulation sim(W, H);
 
 
 		//int primary_W = 1680;
@@ -718,6 +796,101 @@ int main(int, char**)
 		gl3wInit();
 
 
+		
+		//=========================== Init OpenCL================================
+		OpenCL* opencl = getGlobalOpenCL();
+		if(!opencl)
+			throw glare::Exception("Failed to open OpenCL: " + getGlobalOpenCLLastErrorMsg());
+
+
+		const std::vector<OpenCLDeviceRef> devices = opencl->getOpenCLDevices();
+
+		if(devices.empty())
+			throw glare::Exception("No OpenCL devices found");
+
+		OpenCLDeviceRef opencl_device = devices[0]; // Just use first device for now.
+
+		OpenCLContextRef opencl_context = new OpenCLContext(opencl_device, /*enable opengl interop=*/true);
+
+		std::vector<OpenCLDeviceRef> devices_to_build_for(1, opencl_device);
+
+		const bool profile = false;
+
+		OpenCLCommandQueueRef command_queue = new OpenCLCommandQueue(opencl_context, opencl_device->opencl_device_id, profile);
+
+		std::string build_log;
+		OpenCLProgramRef program;
+		try
+		{
+			// Prepend some definitions to the source code
+			std::string src = FileUtils::readEntireFile("N:\\terraingen\\trunk\\erosion_kernel.cl");
+			src = 
+				"#define W " + toString(W) + "\n" +
+				"#define H " + toString(H) + "\n" +
+				src;
+
+			program = opencl->buildProgram(
+				src,
+				opencl_context,
+				devices_to_build_for,
+				"-cl-mad-enable", // compile options
+				build_log
+			);
+
+			conPrint("Build log: " + build_log);
+		}
+		catch(glare::Exception& e)
+		{
+			conPrint("Build log: " + build_log);
+			throw e;
+		}
+
+		Constants constants;
+		constants.delta_t = 0.08f;//0.01f; // time step
+		constants.r = 0.012f; // rainfall rate
+		constants.A = 1; // cross-sectional 'pipe' area
+		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
+		constants.l = 1.0; // l = pipe length
+		constants.f = 0.05f; // friction constant
+		constants.l_x = 1; // width between grid points in x direction
+		constants.l_y = 1;
+
+		constants.K_c = 0.5f; // sediment capacity constant
+		constants.K_s = 3; // 0.5f; // dissolving constant.
+		constants.K_d = 0.5f; // deposition constant
+		constants.K_dmax = 1.f;
+		constants.K_e = 0.05f; // Evaporation constant
+		constants.K_t = 0.03f; // Thermal erosion constant
+		constants.K_tdep = 0.03f; // thermal erosion constant for deposited sediment
+		constants.max_talus_angle = Maths::pi<float>()/4;
+		constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
+		constants.max_deposited_talus_angle = 0.1f;
+		constants.tan_max_deposited_talus_angle = std::tan(constants.max_deposited_talus_angle);
+
+		sim.terrain_state_buffer.alloc(opencl_context, /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
+		sim.flow_state_buffer_a.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
+		sim.flow_state_buffer_b.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
+		sim.thermal_erosion_state_buffer.alloc(opencl_context, W * H * sizeof(ThermalErosionState), CL_MEM_READ_WRITE);
+		sim.constants_buffer.allocFrom(opencl_context, &constants, sizeof(Constants), CL_MEM_READ_ONLY);
+
+		sim.flowSimulationKernel = new OpenCLKernel(program, "flowSimulationKernel", opencl_device->opencl_device_id, profile);
+		sim.thermalErosionFluxKernel = new OpenCLKernel(program, "thermalErosionFluxKernel", opencl_device->opencl_device_id, profile);
+		sim.thermalErosionDepositedFluxKernel = new OpenCLKernel(program, "thermalErosionDepositedFluxKernel", opencl_device->opencl_device_id, profile);
+		sim.waterAndVelFieldUpdateKernel = new OpenCLKernel(program, "waterAndVelFieldUpdateKernel", opencl_device->opencl_device_id, profile);
+		sim.erosionAndDepositionKernel = new OpenCLKernel(program, "erosionAndDepositionKernel", opencl_device->opencl_device_id, profile);
+		sim.sedimentTransportationKernel = new OpenCLKernel(program, "sedimentTransportationKernel", opencl_device->opencl_device_id, profile);
+		sim.thermalErosionMovementKernel = new OpenCLKernel(program, "thermalErosionMovementKernel", opencl_device->opencl_device_id, profile);
+		sim.thermalErosionDepositedMovementKernel = new OpenCLKernel(program, "thermalErosionDepositedMovementKernel", opencl_device->opencl_device_id, profile);
+		sim.evaporationKernel = new OpenCLKernel(program, "evaporationKernel", opencl_device->opencl_device_id, profile);
+		sim.setHeightFieldMeshKernel = new OpenCLKernel(program, "setHeightFieldMeshKernel", opencl_device->opencl_device_id, profile);
+	
+
+		
+
+
+		
+
+
 		// Initialise ImGUI
 		ImGui::CreateContext();
 
@@ -729,6 +902,7 @@ int main(int, char**)
 		OpenGLEngineSettings settings;
 		settings.compress_textures = true;
 		settings.shadow_mapping = true;
+		settings.depth_fog = true;
 		Reference<OpenGLEngine> opengl_engine = new OpenGLEngine(settings);
 		opengl_engine->are_8bit_textures_sRGB = true;
 
@@ -782,29 +956,51 @@ int main(int, char**)
 		}
 
 
-		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), OpenGLTexture::Format_SRGB_Uint8, OpenGLTexture::Filtering_Bilinear);
+		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), OpenGLTexture::/*Format_SRGB_Uint8*/Format_RGBA_Linear_Uint8, OpenGLTexture::Filtering_Bilinear);
+
 
 		InitialTerrainShape initial_terrain_shape = InitialTerrainShape::InitialTerrainShape_Perlin;
 		HeightFieldShow cur_heightfield_show = HeightFieldShow::HeightFieldShow_TerrainOnly;
-		TextureShow cur_texture_show = TextureShow::TextureShow_WaterDepth;
+		TextureShow cur_texture_show = TextureShow::TextureShow_DepositedSediment;
 		float tex_display_max_val = 1;
 
 
-
-		resetTerrain(sim, command_queue, initial_terrain_shape);
+		float initial_height_scale = 0.3f;
+		float noise_x_scale = 3;
+		float noise_y_scale = 3;
+		resetTerrain(sim, command_queue, initial_terrain_shape, initial_height_scale, noise_x_scale, noise_y_scale);
 
 
 		// Add terrain object
 		GLObjectRef terrain_gl_ob = new GLObject();
-		terrain_gl_ob->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(0.002f);
+		terrain_gl_ob->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(1.f);// Matrix4f::uniformScaleMatrix(0.002f);
 		terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cur_heightfield_show);
 
+		glFinish();
+
+		//----------------------------------------------
+		// Get OpenCL buffer for OpenGL terrain texture
+		cl_int retcode = 0;
+		const cl_mem terrain_tex_cl_mem = getGlobalOpenCL()->clCreateFromGLTexture(opencl_context->getContext(), CL_MEM_WRITE_ONLY, /*texture target=*/GL_TEXTURE_2D, /*miplevel=*/0, /*texture=*/terrain_col_tex->texture_handle, &retcode);
+		if(retcode != CL_SUCCESS)
+			throw glare::Exception("Failed to create OpenCL buffer for GL terrain texture: " + OpenCL::errorString(retcode));
+
+		sim.terrain_tex_cl_mem = terrain_tex_cl_mem;
+
+		// Get OpenCL buffer for OpenGL mesh vertex buffer
+		const GLuint buffer_name = terrain_gl_ob->mesh_data->vbo_handle.vbo->bufferName();
+		const cl_mem mesh_vert_buffer_cl_mem = getGlobalOpenCL()->clCreateFromGLBuffer(opencl_context->getContext(), CL_MEM_WRITE_ONLY, buffer_name, &retcode);
+		if(retcode != CL_SUCCESS)
+			throw glare::Exception("Failed to create OpenCL buffer for GL buffer: " + OpenCL::errorString(retcode));
+
+		sim.heightfield_mesh_buffer = mesh_vert_buffer_cl_mem;
+		sim.heightfield_mesh_offset_B = (uint32)terrain_gl_ob->mesh_data->vbo_handle.offset;
+		//----------------------------------------------
 		
 
 		UpdateTexResults results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
 
 		terrain_gl_ob->materials.resize(1);
-		terrain_gl_ob->materials[0].albedo_linear_rgb = Colour3f(0.5f, 0.6f, 0.5f);
 		terrain_gl_ob->materials[0].albedo_texture = terrain_col_tex;
 
 		opengl_engine->addObject(terrain_gl_ob);
@@ -815,20 +1011,27 @@ int main(int, char**)
 
 		TerrainStats stats = computeTerrainStats(sim);
 
-		float cam_phi = 0.7f;
+		float cam_phi = 0.0;
 		float cam_theta = 1.f;
-		Vec4f cam_target_pos = Vec4f(0.5f,0.5f,0,1);
-		float cam_dist = 2;
+		Vec4f cam_target_pos = Vec4f(W / 2.f, H / 2.f, 100, 1);
+		float cam_dist = 500;
+		bool orbit_camera = false;
 
 		bool sim_running = true;
 		
-
-		
+		Timer time_since_last_frame;
+		Timer stats_timer;
+		int stats_last_num_iters = 0;
+		double stats_last_iters_per_sec = 0;
+		bool reset = false;
 
 		bool quit = false;
 		while(!quit)
 		{
 			//const double cur_time = timer.elapsed();
+
+			if(orbit_camera)
+				cam_phi = (float)(timer.elapsed() * 0.1);
 			
 
 			//TEMP:
@@ -854,7 +1057,7 @@ int main(int, char**)
 
 			opengl_engine->setViewport(gl_w, gl_h);
 			opengl_engine->setMainViewport(gl_w, gl_h);
-			opengl_engine->setMaxDrawDistance(100.f);
+			opengl_engine->setMaxDrawDistance(1000000.f);
 			opengl_engine->setPerspectiveCameraTransform(world_to_camera_space_matrix, sensor_width, lens_sensor_dist, render_aspect_ratio, /*lens shift up=*/0.f, /*lens shift right=*/0.f);
 			opengl_engine->setCurrentTime((float)timer.elapsed());
 			opengl_engine->draw();
@@ -869,24 +1072,30 @@ int main(int, char**)
 
 			//ImGui::ShowDemoWindow();
 
-			ImGui::SetNextWindowSize(ImVec2(600, 700));
+			ImGui::SetNextWindowSize(ImVec2(600, 900));
 			ImGui::Begin("TerrainGen");
 
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation parameters");
 			bool param_changed = false;
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/5.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/4.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/2.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle (rad) ", /*val=*/&constants.max_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad) ", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			
+			
 			constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
+			constants.tan_max_deposited_talus_angle = std::tan(constants.max_deposited_talus_angle);
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Visualisation");
@@ -922,6 +1131,7 @@ int main(int, char**)
 
 			ImGui::SliderFloat(/*label=*/"Texture display max val", /*val=*/&tex_display_max_val, /*min=*/0.0f, /*max=*/10.f, "%.5f");
 
+			ImGui::Checkbox("orbit camera", &orbit_camera);
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation control");
@@ -962,20 +1172,34 @@ int main(int, char**)
 				ImGui::EndCombo();
 			}
 
+			ImGui::SliderFloat(/*label=*/"Initial height scale", /*val=*/&initial_height_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Noise x scale", /*val=*/&noise_x_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Noise y scale", /*val=*/&noise_y_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+
+
 			ImGui::Dummy(ImVec2(100, 20));
-			const bool reset = ImGui::Button("Reset terrain");
+			reset = ImGui::Button("Reset terrain") || reset;
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Info");
 			ImGui::Text((std::string(sim_running ? "Sim running" : "Sim paused") + ", iteration: " + toString(sim.sim_iteration)).c_str());
+			ImGui::Text(("Speed: " + toString((int)stats_last_iters_per_sec) + " iters/s").c_str());
+
+			
 			
 			ImGui::Text(("Total terrain volume: " + doubleToStringScientific(stats.total_volume, 4) + "m^3").c_str());
+			ImGui::Text(("Total terrain and deposited sed volume: " + doubleToStringScientific(stats.total_volume + stats.total_deposited_sediment_vol, 4) + "m^3").c_str());
+			ImGui::Text(("Total water volume: " + doubleToStringMaxNDecimalPlaces(stats.total_water_volume, 4) + "m^3").c_str());
+			ImGui::Text(("Total suspended sediment volume: " + doubleToStringMaxNDecimalPlaces(stats.total_suspended_sediment_vol, 4) + "m^3").c_str());
+			ImGui::Text(("Total deposited sediment volume: " + doubleToStringMaxNDecimalPlaces(stats.total_deposited_sediment_vol, 4) + "m^3").c_str());
 			ImGui::Text(("max texture value: " + toString(results.max_value)).c_str());
 			ImGui::End(); 
 
 			if(reset)
 			{
-				resetTerrain(sim, command_queue, initial_terrain_shape);
+				resetTerrain(sim, command_queue, initial_terrain_shape,initial_height_scale, noise_x_scale, noise_y_scale);
+				stats_last_num_iters = 0;
+				reset = false;
 			}
 			if(param_changed)
 			{
@@ -984,38 +1208,42 @@ int main(int, char**)
 
 			
 
-			// Update terrain object
+			// Update terrain OpenGL mesh and texture from the sim
 			if(time_since_mesh_update.elapsed() > 0.1)
 			{
-				sim.readBackToCPUMem(command_queue);
+				glFinish();
+				sim.updateHeightFieldMeshAndTexture(command_queue); // Do with OpenGL - OpenCL interop
 
-				opengl_engine->removeObject(terrain_gl_ob);
-				terrain_gl_ob = NULL;
+				// Code to do via CPU:
+				
+				//opengl_engine->removeObject(terrain_gl_ob);
+				//terrain_gl_ob = NULL;
 
-				results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
+				//results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
 
-				terrain_gl_ob = new GLObject();
-				terrain_gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, 0.01f) * Matrix4f::uniformScaleMatrix(0.002f);
-				terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cur_heightfield_show);
+				//terrain_gl_ob = new GLObject();
+				//terrain_gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, 0.01f) * Matrix4f::uniformScaleMatrix(0.002f);
+				//terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cur_heightfield_show);
 
+				//terrain_gl_ob->materials.resize(1);
+				//terrain_gl_ob->materials[0].albedo_texture = terrain_col_tex;
 
-				terrain_gl_ob->materials.resize(1);
-				terrain_gl_ob->materials[0].albedo_linear_rgb = Colour3f(0.5f, 0.6f, 0.5f);
-				terrain_gl_ob->materials[0].albedo_texture = terrain_col_tex;
-
-				opengl_engine->addObject(terrain_gl_ob);
-
-
-				// Update statistics
-				stats = computeTerrainStats(sim);
-
+				//opengl_engine->addObject(terrain_gl_ob);
+				
 				time_since_mesh_update.reset();
 			}
 
 
-			
+			if(stats_timer.elapsed() > 5.0)
+			{
+				// Update statistics
+				stats = computeTerrainStats(sim);
+				
+				stats_last_iters_per_sec = (sim.sim_iteration - stats_last_num_iters) / stats_timer.elapsed();
 
-			
+				stats_timer.reset();
+				stats_last_num_iters = sim.sim_iteration;
+			}
 
 			
 			ImGui::Render();
@@ -1023,6 +1251,13 @@ int main(int, char**)
 
 			// Display
 			SDL_GL_SwapWindow(win);
+
+			const double dt = (float)time_since_last_frame.elapsed();
+			time_since_last_frame.reset();
+
+			const Vec4f forwards = GeometrySampling::dirForSphericalCoords(-cam_phi + Maths::pi_2<float>(), Maths::pi<float>() - cam_theta);
+			const Vec4f right = normalise(crossProduct(forwards, Vec4f(0,0,1,0)));
+			const Vec4f up = crossProduct(right, forwards);
 
 			// Handle any events
 			SDL_Event e;
@@ -1051,6 +1286,8 @@ int main(int, char**)
 				}
 				else if(e.type == SDL_KEYDOWN)
 				{
+					if(e.key.keysym.sym == SDLK_r)
+						reset = true;
 				}
 				else if(e.type == SDL_MOUSEMOTION)
 				{
@@ -1068,12 +1305,7 @@ int main(int, char**)
 					{
 						//conPrint("SDL_BUTTON_MMASK or SDL_BUTTON_RMASK down");
 
-						const float move_scale = 0.005f;
-
-						const Vec4f forwards = GeometrySampling::dirForSphericalCoords(-cam_phi + Maths::pi_2<float>(), Maths::pi<float>() - cam_theta);
-						const Vec4f right = normalise(crossProduct(forwards, Vec4f(0,0,1,0)));
-						const Vec4f up = crossProduct(right, forwards);
-
+						const float move_scale = 1.f;
 						cam_target_pos += right * -(float)e.motion.xrel * move_scale + up * (float)e.motion.yrel * move_scale;
 					}
 				}
@@ -1083,6 +1315,23 @@ int main(int, char**)
 					cam_dist = myClamp<float>(cam_dist - cam_dist * e.wheel.y * 0.2f, 0.01f, 10000.f);
 				}
 			}
+
+			SDL_PumpEvents();
+			const uint8* keystate = SDL_GetKeyboardState(NULL);
+			if(keystate[SDL_SCANCODE_LEFT])
+				cam_phi += dt * 0.25f;
+			if(keystate[SDL_SCANCODE_RIGHT])
+				cam_phi -= dt * 0.25f;
+
+			const float move_speed = 140.f;
+			if(keystate[SDL_SCANCODE_W])
+				cam_target_pos += forwards * dt * move_speed;
+			if(keystate[SDL_SCANCODE_S])
+				cam_target_pos -= forwards * dt * move_speed;
+			if(keystate[SDL_SCANCODE_A])
+				cam_target_pos -= right * dt * move_speed;
+			if(keystate[SDL_SCANCODE_D])
+				cam_target_pos += right * dt * move_speed;
 		}
 		SDL_Quit();
 		return 0;
