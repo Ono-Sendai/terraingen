@@ -20,12 +20,14 @@ inline float square(float x)
 
 typedef struct
 {
-	float height; // terrain height ('b')
-	float water; // water height ('d')
-	float suspended; // Amount of suspended sediment. ('s')
-	float deposited_sed; // deposited sediment
+	float height; // terrain height ('b') (m)
+	float water; // water height (depth) above terrain ('d') (m)
+	float suspended_vol; // Volume of suspended sediment. ('s') (m^3)
+	float deposited_sed; // Height of deposited sediment (m)
 
 	float u, v; // currently storing water flux (m^3/s) in x and y directions. OLD: velocity
+	float water_vel;
+	//float sed_flux;
 
 } TerrainState;
 
@@ -39,7 +41,7 @@ typedef struct
 
 typedef struct
 {
-	float flux[8];
+	float flux[8]; // outflow flux per unit area of cell.  m^3 s^-1 / m^2 = m s^-1
 
 } ThermalErosionState;
 
@@ -59,8 +61,8 @@ typedef struct
 	float g; // gravity accel magnitude. positive.
 	float l; // virtual pipe length
 	float f; // fricton constant
-	float l_x; // width between grid points in x direction
-	float l_y;
+	float cell_w; // Width of cell = spacing between grid cells (metres)
+	float recip_cell_w; // 1 / cell_w
 
 	float K_c;// = 0.01; // 1; // sediment capacity constant
 	float K_s;// = 0.01; // 0.5; // dissolving constant.
@@ -74,15 +76,28 @@ typedef struct
 	float tan_max_talus_angle;
 	float max_deposited_talus_angle;
 	float tan_max_deposited_talus_angle;
+
+	// Draw options:
+	int include_water_height;
+	int draw_water;
 } Constants;
 
+
+float rainfallFactorForCoords(int x, int y)
+{
+	const float px = (float)x;
+	const float py = (float)y;
+
+	//return length((float2)(px, py) - (float2)(W/2.f, H/2.f)) < 50.f ? 1.f : 0.f;
+	return 1.f;
+}
 
 // Sets f_L, f_T, f_R, f_B in new_flow_state
 __kernel void flowSimulationKernel(
 	__global const TerrainState* restrict const terrain_state, 
 	__global const FlowState* restrict const flow_state, 
 	__global       FlowState* restrict const new_flow_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 )
 {
 	const int x = get_global_id(0);
@@ -105,25 +120,31 @@ __kernel void flowSimulationKernel(
 	// Step 1: water increment
 
 	// Compute intermediate water height (eqn. 1)
-	const float d_1 = state_middle->water + constants->delta_t * constants->r;
+	const float d_1   = state_middle->water + constants->delta_t * constants->r * rainfallFactorForCoords(x, y);
+	const float d_L_1 = state_left  ->water + constants->delta_t * constants->r * rainfallFactorForCoords(x_minus_1, y);
+	const float d_T_1 = state_top   ->water + constants->delta_t * constants->r * rainfallFactorForCoords(x, y_plus_1);
+	const float d_R_1 = state_right ->water + constants->delta_t * constants->r * rainfallFactorForCoords(x_plus_1, y);
+	const float d_B_1 = state_bot   ->water + constants->delta_t * constants->r * rainfallFactorForCoords(x, y_minus_1);
 
 	// Step 2: Flow simulation
 
 	// Eqn. 3: Compute total height difference between this cell and adjacent cells 
 	// NOTE: since rainfall is constant for all cells, it cancels out, so ignore when computing height differences.
-	const float middle_total_h = state_middle->height + state_middle->deposited_sed + state_middle->water;
-	const float delta_h_L = middle_total_h - (state_left ->height + state_left ->deposited_sed + state_left ->water);
-	const float delta_h_T = middle_total_h - (state_top  ->height + state_top  ->deposited_sed + state_top  ->water);
-	const float delta_h_R = middle_total_h - (state_right->height + state_right->deposited_sed + state_right->water);
-	const float delta_h_B = middle_total_h - (state_bot  ->height + state_bot  ->deposited_sed + state_bot  ->water);
+	const float middle_total_h = state_middle->height + state_middle->deposited_sed + d_1;
+	const float delta_h_L = middle_total_h - (state_left ->height + state_left ->deposited_sed + d_L_1);
+	const float delta_h_T = middle_total_h - (state_top  ->height + state_top  ->deposited_sed + d_T_1);
+	const float delta_h_R = middle_total_h - (state_right->height + state_right->deposited_sed + d_R_1);
+	const float delta_h_B = middle_total_h - (state_bot  ->height + state_bot  ->deposited_sed + d_B_1);
 
 
-	const float friction_factor = (1.0f - constants->f * constants->delta_t);
+	
 
 	// Eqn. 2: Compute outflow flux to adjacent cells
 	const float h_p = state_middle->water;
-	const float w = 1.0f; // pipe width
-	// Assume w = l, so w/l factor in flux deriv = 1.
+
+	const float friction_factor = (1.0f - constants->f * constants->delta_t / h_p);
+
+	// Assume pipe width = pipe length (w = l), so w/l factor in flux deriv = 1.
 	const float flux_factor = constants->delta_t * h_p * constants->g;
 	float f_L_next = max(0.f, flow_state_middle->f_L * friction_factor  +  flux_factor * delta_h_L); // If this cell is higher than left cell, delta_h_L is positive
 	float f_T_next = max(0.f, flow_state_middle->f_T * friction_factor  +  flux_factor * delta_h_T);
@@ -156,11 +177,12 @@ __kernel void flowSimulationKernel(
 
 	
 
-	// d_1 * l_x * l_y = current water volume in cell
+	// d_1 * cell_w * cell_w = current water volume in cell
 	// (f_L_next + f_T_next + f_R_next + f_B_next) * delta_t = volume of water to be removed next timestep.  (m^3 s^-1  .  s = m^3)
 	// If the volume of water to be removed is > current volume, we scale down the volume of water to be removed.
-	const float cur_vol = d_1 * constants->l_x * constants->l_y;
-	float K = min(1.f, cur_vol / ((f_L_next + f_T_next + f_R_next + f_B_next) * constants->delta_t)); // Eqn. 4
+	const float cur_vol = d_1 * square(constants->cell_w);
+	const float delta_vol = (f_L_next + f_T_next + f_R_next + f_B_next) * constants->delta_t;
+	float K = min(1.f, cur_vol / delta_vol); // Eqn. 4
 
 	f_L_next *= K;
 	f_T_next *= K;
@@ -173,17 +195,27 @@ __kernel void flowSimulationKernel(
 	new_flow_state_middle->f_B = f_B_next;
 
 
-	//NEW: set out sediment flux
-	const float out_L_frac = f_L_next / cur_vol;
-	const float out_R_frac = f_R_next / cur_vol;
-	const float out_B_frac = f_B_next / cur_vol;
-	const float out_T_frac = f_T_next / cur_vol;
+	// Set out sediment flux
+	// fraction of water volume moved next timestep is
+	// out_frac = f_L_next * delta_t / cur_vol         (m^3 s^1  .  s   /   m^3)
+	// Volume of sediment moved next timestep:
+	// delta_sed_vol = cur_suspended_vol * out_frac
+	// sed flux (vol/s) of sediment:
+	// sed flux = delta_sed_vol / delta_t
+	//          = (cur_suspended_vol * out_frac) / delta_t
+	//          = cur_suspended_vol * (f_L_next * delta_t / cur_vol) / delta_t
+	//          = cur_suspended_vol * f_L_next / cur_vol
+	//
+	// Example: 100 m^3 of water in cell, 10 m^3 s^-1 water flux.   (1/10 of water removed each second)
+	// 50 m^3 of suspended sediment in cell.
+	// sed flux
+	// = (50 m^3 / 100 m^3) * 10 m^3 s^-1 = 5 m^3 s^-1   (1/10 of the suspended sediment removed each second)
 
-	const float cur_suspended = state_middle->suspended;
-	new_flow_state_middle->sed_f_L = cur_suspended * out_L_frac;
-	new_flow_state_middle->sed_f_R = cur_suspended * out_R_frac;
-	new_flow_state_middle->sed_f_T = cur_suspended * out_T_frac;
-	new_flow_state_middle->sed_f_B = cur_suspended * out_B_frac;
+	const float cur_suspended_vol = state_middle->suspended_vol;
+	new_flow_state_middle->sed_f_L = cur_suspended_vol / cur_vol * f_L_next;
+	new_flow_state_middle->sed_f_R = cur_suspended_vol / cur_vol * f_R_next;
+	new_flow_state_middle->sed_f_T = cur_suspended_vol / cur_vol * f_T_next;
+	new_flow_state_middle->sed_f_B = cur_suspended_vol / cur_vol * f_B_next;
 }
 
 
@@ -191,7 +223,7 @@ __kernel void flowSimulationKernel(
 __kernel void thermalErosionFluxKernel(
 	__global const TerrainState* restrict const terrain_state, 
 	__global       ThermalErosionState* restrict const thermal_erosion_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 )
 {
 	const int x = get_global_id(0);
@@ -237,14 +269,15 @@ __kernel void thermalErosionFluxKernel(
 			)
 		);
 
-	const float tan_angle_0 = h_0 * (1 / sqrt(2.f));
-	const float tan_angle_1 = h_1;
-	const float tan_angle_2 = h_2 * (1 / sqrt(2.f));
-	const float tan_angle_3 = h_3;
-	const float tan_angle_4 = h_4;
-	const float tan_angle_5 = h_5 * (1 / sqrt(2.f));
-	const float tan_angle_6 = h_6;
-	const float tan_angle_7 = h_7 * (1 / sqrt(2.f));
+	// tan(theta) = h / cell_w        [for immediately adjacent cells]
+	const float tan_angle_0 = h_0 * constants->recip_cell_w * (1 / sqrt(2.f));
+	const float tan_angle_1 = h_1 * constants->recip_cell_w;
+	const float tan_angle_2 = h_2 * constants->recip_cell_w * (1 / sqrt(2.f));
+	const float tan_angle_3 = h_3 * constants->recip_cell_w;
+	const float tan_angle_4 = h_4 * constants->recip_cell_w;
+	const float tan_angle_5 = h_5 * constants->recip_cell_w * (1 / sqrt(2.f));
+	const float tan_angle_6 = h_6 * constants->recip_cell_w;
+	const float tan_angle_7 = h_7 * constants->recip_cell_w * (1 / sqrt(2.f));
 
 	const float tan_max_talus_angle = constants->tan_max_talus_angle;
 
@@ -279,12 +312,11 @@ __kernel void thermalErosionFluxKernel(
 }
 
 
-
 // Sets flux in thermal_erosion_state
 __kernel void thermalErosionDepositedFluxKernel(
 	__global const TerrainState* restrict const terrain_state, 
 	__global       ThermalErosionState* restrict const thermal_erosion_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 )
 {
 	const int x = get_global_id(0);
@@ -330,14 +362,14 @@ __kernel void thermalErosionDepositedFluxKernel(
 			)
 		);
 
-	const float tan_angle_0 = h_0 * (1 / sqrt(2.f));
-	const float tan_angle_1 = h_1;
-	const float tan_angle_2 = h_2 * (1 / sqrt(2.f));
-	const float tan_angle_3 = h_3;
-	const float tan_angle_4 = h_4;
-	const float tan_angle_5 = h_5 * (1 / sqrt(2.f));
-	const float tan_angle_6 = h_6;
-	const float tan_angle_7 = h_7 * (1 / sqrt(2.f));
+	const float tan_angle_0 = h_0 * constants->recip_cell_w * (1 / sqrt(2.f));
+	const float tan_angle_1 = h_1 * constants->recip_cell_w;
+	const float tan_angle_2 = h_2 * constants->recip_cell_w * (1 / sqrt(2.f));
+	const float tan_angle_3 = h_3 * constants->recip_cell_w;
+	const float tan_angle_4 = h_4 * constants->recip_cell_w;
+	const float tan_angle_5 = h_5 * constants->recip_cell_w * (1 / sqrt(2.f));
+	const float tan_angle_6 = h_6 * constants->recip_cell_w;
+	const float tan_angle_7 = h_7 * constants->recip_cell_w * (1 / sqrt(2.f));
 
 	const float tan_max_talus_angle = constants->tan_max_deposited_talus_angle;
 
@@ -354,7 +386,7 @@ __kernel void thermalErosionDepositedFluxKernel(
 
 	const float norm_factor = 1.f / total_height_diff;
 
-	const float cur_deposited_sed = state_middle->deposited_sed;
+	
 
 	const float a = 1.0f; // cell area
 	const float R = 1.f; // hardness TEMP
@@ -374,12 +406,14 @@ __kernel void thermalErosionDepositedFluxKernel(
 		h_6 * common_factors +
 		h_7 * common_factors;
 
+	const float cur_deposited_sed_h = state_middle->deposited_sed;
+
 	float K = 1;
-	if(cur_deposited_sed > 0)
+	if(cur_deposited_sed_h > 0)
 	{
-		if(sum_flux > cur_deposited_sed)
+		if(sum_flux > cur_deposited_sed_h)
 		{
-			K = cur_deposited_sed / sum_flux;
+			K = cur_deposited_sed_h / sum_flux;
 		}
 	}
 	else
@@ -401,7 +435,7 @@ __kernel void thermalErosionDepositedFluxKernel(
 __kernel void waterAndVelFieldUpdateKernel(
 	__global const FlowState* restrict const flow_state, 
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 )
 {
 	const int x = get_global_id(0);
@@ -426,7 +460,7 @@ __kernel void waterAndVelFieldUpdateKernel(
 
 	//const float d_1 = state_middle->water; // Current water height of middle cell
 	// Compute intermediate water height (eqn. 1)
-	const float d_1 = terrain_state_middle->water + constants->delta_t * constants->r;
+	const float d_1 = terrain_state_middle->water + constants->delta_t * constants->r * rainfallFactorForCoords(x, y);
 
 	// Get water fluxes (m^3 s^-1)
 	float in_left_R  = (x > 0)   ? state_left ->f_R : 0; // If this cell is on the left border, inwards flux from left is zero.  Otherwise get from left cell.
@@ -446,7 +480,7 @@ __kernel void waterAndVelFieldUpdateKernel(
 	// m^3 = s * (m^3 s^-1)
 
 	//    m   = m   + m^3     / (m               * m)
-	float d_2 = max(0.f, d_1 + delta_V / (constants->l_x * constants->l_y)); // Eqn. 7: new water height for middle cell: change in height = change in volume / cell area.  
+	float d_2 = max(0.f, d_1 + delta_V / square(constants->cell_w)); // Eqn. 7: new water height for middle cell: change in height = change in volume / cell area.  
 	// Also make sure water level doesn't become negative.
 
 	// Eqn 8.  Compute average amount of water passing through cell (x, y) in the x direction:
@@ -465,13 +499,23 @@ __kernel void waterAndVelFieldUpdateKernel(
 	const float d_bar = (d_1 + d_2) * 0.5f; // Average water height
 
 
+	// Compute average amount of sediment passing through cell (x, y) in the x direction (per unit time):  (m^3 s^-1)
+	/*float delta_sed_x = (in_sed_left_R - state_middle->sed_f_L + state_middle->sed_f_R - in_sed_right_L) * 0.5f;
+	float delta_sed_y = (in_sed_bot_T  - state_middle->sed_f_B + state_middle->sed_f_T - in_sed_top_B) * 0.5f;*/
+	float delta_sed_x = (fabs(in_sed_left_R - state_middle->sed_f_L) + fabs(state_middle->sed_f_R - in_sed_right_L)) * 0.5f;
+	float delta_sed_y = (fabs(in_sed_bot_T  - state_middle->sed_f_B) + fabs(state_middle->sed_f_T - in_sed_top_B)) * 0.5f;
+
+
 	const float delta_sed_V = constants->delta_t *
 		((in_sed_left_R + in_sed_right_L + in_sed_top_B + in_sed_bot_T) - // inwards flow
 		 (state_middle->sed_f_L + state_middle->sed_f_R + state_middle->sed_f_T + state_middle->sed_f_B)); // outwards sediment flow
 	// m^3 = s * (m^3 s^-1)
 
 	// Compute new amount of sediment
-	const float new_suspended = max(0.f, terrain_state_middle->suspended + delta_sed_V);
+	const float new_suspended_vol = max(0.f, terrain_state_middle->suspended_vol + delta_sed_V);
+
+
+	//terrain_state_middle->sed_flux = sqrt(square(delta_sed_x) + square(delta_sed_y));
 
 	//TEMP: store unit discharge in u, v
 	float u = delta_W_x;
@@ -501,8 +545,14 @@ __kernel void waterAndVelFieldUpdateKernel(
 //		v = new_v;
 //	}
 	 
-	//float u = delta_W_x / (d_bar * constants->l_x); // u_{t+delta_t}
-	//float v = delta_W_y / (d_bar * constants->l_y); // v_{t+delta_t}
+	// water vel in x direction 
+	// = water flux / cross sectional area  
+	//   m^3 s^-1   / m^2           =   m s^1
+	// 
+	float water_u = delta_W_x / (d_bar * constants->cell_w); // u_{t+delta_t}
+	float water_v = delta_W_y / (d_bar * constants->cell_w); // v_{t+delta_t}
+
+	float water_vel = sqrt(square(water_u) + square(water_v));
 
 	//const float old_u = terrain_state_middle->u;
 	//const float old_v = terrain_state_middle->v;
@@ -535,17 +585,18 @@ __kernel void waterAndVelFieldUpdateKernel(
 
 	terrain_state_middle->water = d_2;
 #if !DO_SEMILAGRANGIAN_ADVECTION
-	terrain_state_middle->suspended = new_suspended;
+	terrain_state_middle->suspended_vol = new_suspended_vol;
 #endif
 	terrain_state_middle->u = u;
 	terrain_state_middle->v = v;
+	terrain_state_middle->water_vel = water_vel;
 }
 
 
 // Updates 'height', 'suspended', 'sediment' in terrain_state
 __kernel void erosionAndDepositionKernel(
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 	)
 {
 	const int x = get_global_id(0);
@@ -568,27 +619,21 @@ __kernel void erosionAndDepositionKernel(
 	const float B_h = state_bot  ->height + state_bot  ->deposited_sed; // state_bot  ->sediment[0] + state_bot  ->sediment[1] + state_bot  ->sediment[2];// + state_bot  ->water;
 	const float T_h = state_top  ->height + state_top  ->deposited_sed; // state_top  ->sediment[0] + state_top  ->sediment[1] + state_top  ->sediment[2];// + state_top  ->water;
 
-	const float dh_dx = (R_h - L_h) * (1.f / (2*constants->l_x));
-	const float dh_dy = (T_h - B_h) * (1.f / (2*constants->l_y));
+	const float dh_dx = (R_h - L_h) * 0.5f * constants->recip_cell_w; // dh/dx = (R_h - L_h) / (2*cell_w) = (R_h - L_h) * 0.5 * (1/cell_w)
+	const float dh_dy = (T_h - B_h) * 0.5f * constants->recip_cell_w;
 
 	const float3 normal = normalize((float3)(-dh_dx, -dh_dy, 1));
 
-	//const float theta = acos(1 / sqrt(dh_dx*dh_dx + dh_dy*dh_dy + 1));
-	//const float sin_alpha = sin(theta);
-	const float cos_alpha = 1.0f / sqrt(square(dh_dx) + square(dh_dy) + 1); // https://math.stackexchange.com/questions/1044044/local-tilt-angle-based-on-height-field
+	const float cos_alpha = normal.z;
 	const float sin_alpha = sqrt(1 - min(1.0f, cos_alpha*cos_alpha));
+	const float use_sin_alpha = max(0.1f, sin_alpha); // NOTE: min sin alpha
 
-	//const float alpha = max(fabs(state_right->height - state_left->height), fabs(state_top->height - state_bot->height));
-	///float sin_alpha = alpha;
-	//sin_alpha = min(0.5f, sin_alpha);
-	const float use_sin_alpha = max(0.3f, sin_alpha); // NOTE: min sin alpha
-
-	float v_len = sqrt(square(state_middle->u) + square(state_middle->v));
+	float water_flux = sqrt(square(state_middle->u) + square(state_middle->v)); // Volume of water passing through cell per unit time (m^3 s^-1)
 
 	// Compute l_max as a function of water height (d)  (eqn. 10 from 'Fast Hydraulic and Thermal Erosion on the GPU')
 
-	const float3 water_vel = (float3)(state_middle->u, state_middle->v, state_middle->u * dh_dx + state_middle->v * dh_dy);
-	const float3 unit_water_vel = normalize(water_vel);
+	const float3 water_flux_vec = (float3)(state_middle->u, state_middle->v, (state_middle->u * dh_dx + state_middle->v * dh_dy) * constants->cell_w);
+	const float3 unit_water_vel = normalize(water_flux_vec);
 
 	const float hit_dot = max(0.05f, -dot(unit_water_vel, normal));
 			
@@ -604,54 +649,59 @@ __kernel void erosionAndDepositionKernel(
 	//const float water_factor = min(0.01f, state_middle->water * 10.0f);
 	//const float water_factor = min(1.0f, state_middle->water * 1.0f);
 
-	const float water_depth_factor = 1.f;//min(water_d, constants->K_dmax);
+	//const float water_depth_factor = 1.f;//min(water_d, constants->K_dmax);
 
 	// Compute Sediment transport capacity (eq 10)
 
+
+
 	//const float C = 0.001f * constants->K_c * v_len;
 	//const float q = v_len * max(0.f, min(water_d, 1.0f));
-	const float q = min(1.0f, v_len); //fabs(state_middle->u) + fabs(state_middle->v)); // unit water discharge
-	const float q_to_gamma = square(q);
-	const float S = use_sin_alpha;
-	const float S_to_beta = pow(S, 1.5f);
-	const float C = constants->K_c * S_to_beta * q_to_gamma;
-	//const float C = /*hit_dot **/ /*d * */constants->K_c * v_len * /*use_sin_alpha **/ water_depth_factor;//use_sin_alpha * v_len /** (1.0 - l_max)*/;//f/min(10000.0f, v_len);
+	//const float q = min(square(constants->cell_w), water_flux); //fabs(state_middle->u) + fabs(state_middle->v)); // unit water discharge (water flux per unit width of stream?)  (m^3 s^-1 / m = m^2 s^-1)
+	const float q = state_middle->water_vel * water_d;//min(10.0f, water_flux / constants->cell_w);
+	const float q_to_gamma = q;//square(q);
+	//const float S = use_sin_alpha;
+	//const float S_to_beta = pow(S, 1.5f);
+	const float unit_C = constants->K_c /** S_to_beta*/ * q_to_gamma; // m^2 s^-1
+	const float C = unit_C * constants->cell_w; // m^3 s^-1
 			
 	float height = state_middle->height;
-	float suspended = state_middle->suspended;
+	float suspended_vol = state_middle->suspended_vol;
 	float deposited_sed = state_middle->deposited_sed;
-	//const float d_2 = state_middle->water;
-	//float b_new/*, d_3*/;
+
+	float cur_suspended_rate = suspended_vol / constants->cell_w/* * state_middle->water_vel*/;// / constants->delta_t;//state_middle->sed_flux; // TEMP // suspended_vol / constants->cell_w * state_middle->water_vel;
+	// m^3 s^-1              = m^3           / m                 * m s^-1
 	
-	const float suspended_sum = suspended; // suspended[0] + suspended[1] + suspended[2];
-	if(C > suspended_sum) // suspended amount is smaller than transport capacity, dissolve soil into water:
+	//const float suspended_sum = suspended; // suspended[0] + suspended[1] + suspended[2];
+	if(C > cur_suspended_rate) // suspended amount is smaller than transport capacity, dissolve soil into water:
 	{
-		float sed_change = hit_dot * constants->delta_t * constants->K_s * (C - suspended_sum); //delta_t * K_s * (C - s_t);
-		float sed_change_rock = sed_change * 0.3f; //delta_t * K_s * (C - s_t);
-		float sed_change_dep  = sed_change * 0.7f; //delta_t * K_s * (C - s_t);
+		float sed_change = /*hit_dot * */constants->delta_t * constants->K_s * (C - cur_suspended_rate); // s   .   m^3 s^-1  = m^3
+		float sed_change_rock_vol = sed_change * 0.3f; //delta_t * K_s * (C - s_t);
+		float sed_change_dep_vol  = sed_change * 0.7f; //delta_t * K_s * (C - s_t);
 
 		// Dissolve any deposited sediment into the water
-		const float deposited_sed_delta = min(sed_change_dep, deposited_sed); // Dissolve <= the amount of deposited sediment here.
-		deposited_sed -= deposited_sed_delta;
-		suspended += deposited_sed_delta;
+		const float sed_change_dep_h = sed_change_dep_vol / square(constants->cell_w); // m = m^3 / m^2
+		const float deposited_sed_delta_h = min(sed_change_dep_h, deposited_sed); // Dissolve <= the amount of deposited sediment here.
+		deposited_sed -= deposited_sed_delta_h;
+		suspended_vol += deposited_sed_delta_h * square(constants->cell_w);
 
-		sed_change_dep -= deposited_sed_delta;
+		//sed_change_dep -= deposited_sed_delta;
 		
 
-		if(sed_change > 0) // If we have dissolved all deposited sediment, and there is still dissolving to be done:
+		//if(sed_change > 0) // If we have dissolved all deposited sediment, and there is still dissolving to be done:
 		{
 			// Dissolve underlying rock
 
-			height -= sed_change_rock;// Reduce terrain height
-			suspended += sed_change_rock; // Add to suspended height
+			height -= sed_change_rock_vol / square(constants->cell_w);// Reduce terrain height
+			suspended_vol += sed_change_rock_vol; // Add to suspended height
 		}
 	}
 	else // else suspended amount exceeds transport capacity, so deposit sediment:
 	{
-		float sed_change = constants->delta_t * constants->K_d * (suspended_sum - C);
+		float sed_change_vol = constants->delta_t * constants->K_d * (cur_suspended_rate - C);
 
-		suspended -= sed_change;
-		deposited_sed += sed_change;
+		suspended_vol -= sed_change_vol;
+		deposited_sed += sed_change_vol / square(constants->cell_w);
 	}
 		
 	//if(x == 200 && y == 256)
@@ -660,7 +710,7 @@ __kernel void erosionAndDepositionKernel(
 	// Write
 	state_middle->height = height;
 	//state_middle->water = d_2;
-	state_middle->suspended = suspended;
+	state_middle->suspended_vol = suspended_vol;
 	state_middle->deposited_sed = deposited_sed;
 }
 
@@ -802,7 +852,7 @@ inline float mitchellNetravaliCubic(float px, float py, __global       TerrainSt
 // sediment transportation kernel.  Updates 'suspended' in terrain_state
 __kernel void sedimentTransportationKernel(
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 	)
 {
 #if DO_SEMILAGRANGIAN_ADVECTION
@@ -814,10 +864,14 @@ __kernel void sedimentTransportationKernel(
 	float u = state_middle->u;
 	float v = state_middle->v;
 
-	const float old_x = clamp((float)x - /*state_middle->*/u * constants->delta_t/* / constants->l_x*/, 0.0f, (float)(W-1)); // NOTE: should take into account l_x, l_y here
-	const float old_y = clamp((float)y - /*state_middle->*/v * constants->delta_t/* / constants->l_y*/, 0.0f, (float)(H-1));
-	//const float old_x = clamp((float)x - /*state_middle->*/1/* / constants->l_x*/, 0.0f, (float)(W-1)); // NOTE: should take into account l_x, l_y here
-	//const float old_y = clamp((float)y - /*state_middle->*/0/* / constants->l_y*/, 0.0f, (float)(H-1));
+	// If x = grid cell coords, p_x = position coords:
+	// old_p_x = p_x - (d p_x / dt) delta_t
+	// old_p_x = p_x - u delta_t
+	// old_x = old_p_x / cell_w = (p_x - u delta_t) / cell_w
+	// = (x * cell_w - u delta_t) / cell_w
+	// = (x - u delta_t / cell_w) 
+	const float old_x = clamp((float)x - /*state_middle->*/u * constants->delta_t * constants->recip_cell_w, 0.0f, (float)(W-1));
+	const float old_y = clamp((float)y - /*state_middle->*/v * constants->delta_t * constants->recip_cell_w, 0.0f, (float)(H-1));
 
 	const float floor_old_x = floor(old_x);
 	const float floor_old_y = floor(old_y);
@@ -864,7 +918,7 @@ __kernel void sedimentTransportationKernel(
 __kernel void thermalErosionMovementKernel(
 	__global const ThermalErosionState* restrict const thermal_erosion_state, 
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 )
 {
 	const int x = get_global_id(0);
@@ -936,14 +990,14 @@ __kernel void thermalErosionMovementKernel(
 
 	const float net_material_change = sum_material_in - sum_material_out;
 
-	middle_terrain_state->height += net_material_change; // NOTE: Take into account area?
+	middle_terrain_state->height += net_material_change;
 }
 
 
 __kernel void thermalErosionDepositedMovementKernel(
 	__global const ThermalErosionState* restrict const thermal_erosion_state, 
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 )
 {
 	const int x = get_global_id(0);
@@ -1015,7 +1069,7 @@ __kernel void thermalErosionDepositedMovementKernel(
 
 	const float net_material_change = sum_material_in - sum_material_out;
 
-	middle_terrain_state->deposited_sed += net_material_change; // NOTE: Take into account area?
+	middle_terrain_state->deposited_sed += net_material_change;
 }
 
 
@@ -1023,7 +1077,7 @@ __kernel void thermalErosionDepositedMovementKernel(
 // evaporation kernel.  Updates 'water' in terrain_state
 __kernel void evaporationKernel(
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants
+	__constant Constants* restrict const constants
 	)
 {
 	const int x = get_global_id(0);
@@ -1044,14 +1098,14 @@ typedef struct
 	float uv[2];
 } Vertex;
 
-inline float totalTerrainHeight(__global TerrainState* restrict const state)
+inline float totalTerrainHeight(__global TerrainState* restrict const state, bool include_water)
 {
-	return state->height + state->deposited_sed;
+	return state->height + state->deposited_sed + (include_water ? state->water : 0.f);
 }
 
 __kernel void setHeightFieldMeshKernel(
 	__global       TerrainState* restrict const terrain_state, 
-	__global Constants* restrict const constants,
+	__constant Constants* restrict const constants,
 	__global Vertex* restrict const vertex_buffer,
 	unsigned int vertex_buffer_offset_B,
 	write_only image2d_t terrain_texture
@@ -1069,7 +1123,7 @@ __kernel void setHeightFieldMeshKernel(
 
 	__global Vertex* mesh_vert = &mesh_vert_0[x + y * vert_xres];
 
-	float quad_w_x = 1.f;//(float)W/ quad_xres; // Width in metres of each quad
+	float quad_w_x = constants->cell_w; // Width in metres of each quad
 	float quad_w_y = quad_w_x;
 	if(H <= 10)
 	{
@@ -1081,16 +1135,16 @@ __kernel void setHeightFieldMeshKernel(
 
 	const float p_x = x * quad_w_x;
 	const float p_y = y * quad_w_y;
-	const float dx = 1.f;
-	const float dy = 1.f;
+	const float dx = quad_w_x;
+	const float dy = quad_w_y;
 
 	const int src_x = min(x, max_src_x);
 	const int src_y = min(y, max_src_y);
 	const int src_x_1 = min(x + 1, max_src_x);
 	const int src_y_1 = min(y + 1, max_src_y);
-	const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W]);// + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(src_x,   src_y).water : 0);
-	const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W]);// + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(src_x_1, src_y).water : 0);
-	const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W]);// + (cur_heightfield_show == HeightFieldShow::HeightFieldShow_TerrainAndWater ? sim.terrain_state.elem(src_x, src_y_1).water : 0);
+	const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W], constants->include_water_height);
+	const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W], constants->include_water_height);
+	const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W], constants->include_water_height);
 
 	const float3 p_dx_minus_p = (float3)(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
 	const float3 p_dy_minus_p = (float3)(0, dy, z_dy - z);
@@ -1110,10 +1164,19 @@ __kernel void setHeightFieldMeshKernel(
 	// Write to terrain texture
 	const float3 rock_col = pow((float3)(64.0 / 255.0, 60.0 / 255.0, 45 / 255.0), 2.2); // brown
 	const float3 deposited_col = pow((float3)(103 / 255.0, 91 / 255.0, 67 / 255.0), 2.2); // lighter orange brown
+	//const float3 deposited_col = pow((float3)(103 / 255.0, 121 / 255.0, 67 / 255.0), 2.2); // lighter orange brown
 	const float3 snow_col = (float3)(0.95f);
+	const float3 water_col = (float3)(0,0,1.f);
 
-	//const float val = terrain_state[src_x   + src_y  *W].deposited_sed + terrain_state[src_x   + src_y  *W].water;
-	const float3 final_col = mix(rock_col, snow_col, smoothstep(0.f, 0.3f, terrain_state[src_x   + src_y  *W].deposited_sed));
+
+	const float water_h = terrain_state[src_x   + src_y  *W].water;
+	const float water_frac = constants->draw_water ? (1.f - exp(-2.f * water_h)) : 0.f;
+
+	const float3 final_col = mix(
+		mix(rock_col, deposited_col, smoothstep(0.f, 0.3f, terrain_state[src_x   + src_y  *W].deposited_sed)),
+		water_col,
+		water_frac
+	);
 
 	write_imagef(terrain_texture, (int2)(x, y), (float4)(final_col, 1.f));
 }
