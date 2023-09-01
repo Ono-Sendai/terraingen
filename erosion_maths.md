@@ -136,3 +136,25 @@ a_x = g (g_1 - g_2) / l
 $$
 
 Which is basically the same result as for water depth differences.
+
+## Friction force
+
+Assuming friction force for water in a pipe is proportional to the top-down surface area of the cell ($w \times w$), as well as the average water velocity, the friction force is
+
+$$
+f_f = -w^2 k_f v
+$$
+
+where $K_f$ is a friction coefficient, and $v$ is the (average) fluid velocity.
+
+This results in an acceleration of
+
+$$
+a = f_f/m = {-w^2 k_f v \over w^2 h_p \rho } = {-k_f v \over h_p \rho }
+$$
+
+Folding the denisty $\rho$ into the friction constant:
+$$
+a = {-k_f' v \over h_p \rho }
+$$
+
