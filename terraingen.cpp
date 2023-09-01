@@ -19,6 +19,7 @@ Copyright Nicholas Chapman 2023 -
 #include <maths/PCG32.h>
 #include <opengl/VBO.h>
 #include <opengl/VAO.h>
+#include <opengl/MeshPrimitiveBuilding.h>
 #include <opencl/OpenCL.h>
 #include <opencl/OpenCLKernel.h>
 #include <opencl/OpenCLBuffer.h>
@@ -80,6 +81,7 @@ typedef struct
 	float K_s;// = 0.01; // 0.5; // dissolving constant.
 	float K_d;// = 0.01; // 1; // deposition constant
 	float K_dmax;// = 0.1f; // Maximum erosion depth: water depth at which erosion stops.
+	float q_0; // Minimum unit water discharge for sediment carrying.
 	float K_e; // Evaporation constant
 
 	float K_t; // thermal erosion constant
@@ -88,9 +90,12 @@ typedef struct
 	float tan_max_talus_angle;
 	float max_deposited_talus_angle;
 	float tan_max_deposited_talus_angle;
+	float sea_level;
 
 	int include_water_height;
 	int draw_water;
+	Colour3f rock_col;
+	Colour3f sediment_col;
 } Constants;
 
 
@@ -124,6 +129,8 @@ public:
 
 	cl_mem heightfield_mesh_buffer;
 	uint32 heightfield_mesh_offset_B;
+	//cl_mem water_heightfield_mesh_buffer;
+	//uint32 water_heightfield_mesh_offset_B;
 	cl_mem terrain_tex_cl_mem;
 
 
@@ -212,7 +219,7 @@ public:
 
 	void updateHeightFieldMeshAndTexture(OpenCLCommandQueueRef command_queue)
 	{
-		const cl_mem mem_objects[] = { heightfield_mesh_buffer, terrain_tex_cl_mem };
+		const cl_mem mem_objects[] = { heightfield_mesh_buffer, /*water_heightfield_mesh_buffer, */terrain_tex_cl_mem };
 		::getGlobalOpenCL()->clEnqueueAcquireGLObjects(command_queue->getCommandQueue(),
 			/*num objects=*/staticArrayNumElems(mem_objects), /*mem objects=*/mem_objects, /*num objects in wait list=*/0, /*event wait list=*/NULL, /*event=*/NULL);
 		
@@ -221,6 +228,9 @@ public:
 		setHeightFieldMeshKernel->setKernelArgBuffer(2, heightfield_mesh_buffer);
 		setHeightFieldMeshKernel->setKernelArgUInt(3, heightfield_mesh_offset_B);
 		setHeightFieldMeshKernel->setKernelArgBuffer(4, terrain_tex_cl_mem);
+		//setHeightFieldMeshKernel->setKernelArgBuffer(5, water_heightfield_mesh_buffer);
+		//setHeightFieldMeshKernel->setKernelArgUInt(6, water_heightfield_mesh_offset_B);
+
 		
 		setHeightFieldMeshKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
@@ -503,155 +513,6 @@ TerrainStats computeTerrainStats(Simulation& sim)
 }
 
 
-
-
-struct UpdateTexResults
-{
-	float max_value;
-};
-
-UpdateTexResults updateTerrainTexture(Simulation& sim, OpenGLTextureRef texture, TextureShow cur_texture_show, float tex_display_max_val)
-{
-	const int W = (int)sim.terrain_state.getWidth();
-	const int H = (int)sim.terrain_state.getHeight();
-	std::vector<uint8> tex_data(W * H * 3);
-
-	/*conPrint("--------------------");
-	for(int x=0; x<W; ++x)
-	{
-		const float water_h = sim.current_state->elem(x, H/2).water;
-		printVar(water_h);
-	}*/
-
-	//conPrint("--------------------");
-	//for(int x=0; x<W; ++x)
-	//{
-	//	const int y = H/2;
-	//	const float suspended = sim.terrain_state.elem(x, y).suspended;
-	//	const float water_h = sim.terrain_state.elem(x, y).water;
-	//	const float water_speed = sqrt(Maths::square(sim.terrain_state.elem(x, y).u) + Maths::square(sim.terrain_state.elem(x, y).v));
-	//	const float flux_R = sim.flow_state.elem(x, y).f_R;
-	//	conPrint("x=" + toString(x) + ",y=" + toString(H/2) + ", suspended: " + toString(suspended) + ", water_h: " + toString(water_h) + ", water_speed: " + toString(water_speed) + ", flux_R: " + toString(flux_R));
-	//}
-
-	/*conPrint("--------------------");
-	for(int x=0; x<W; ++x)
-	{
-		const int y = H/2;
-		const float water_speed = sqrt(Maths::square(sim.terrain_state.elem(x, y).u) + Maths::square(sim.terrain_state.elem(x, y).v));
-		printVar(water_speed);
-
-		const float water_h = sim.terrain_state.elem(x, y).water;
-		printVar(water_h);
-	}*/
-	UpdateTexResults results;
-	results.max_value = 0;
-
-
-	if(cur_texture_show == TextureShow_WaterDepth)
-	{
-		float max_water_h = 0;
-		for(int y=0; y<H; ++y)
-		for(int x=0; x<W; ++x)
-		{
-			const float water_h = sim.terrain_state.elem(x, y).water;
-			max_water_h = myMax(max_water_h, water_h);
-			const float water_val = myMax(0.0f, water_h / tex_display_max_val);
-
-			tex_data[(y*W + x)*3 + 0] = 0;
-			tex_data[(y*W + x)*3 + 1] = 0;
-			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(water_val * 255), 0, 255);
-		}
-		results.max_value = max_water_h;
-	}
-	else if(cur_texture_show == TextureShow_WaterSpeed)
-	{
-		float max_water_speed = 0;
-		for(int y=0; y<H; ++y)
-		for(int x=0; x<W; ++x)
-		{
-			const float water_speed = sqrt(Maths::square(sim.terrain_state.elem(x, y).u) + Maths::square(sim.terrain_state.elem(x, y).v));
-			max_water_speed = myMax(max_water_speed, water_speed);
-			const float water_speed_val = water_speed / tex_display_max_val;
-
-			tex_data[(y*W + x)*3 + 0] = 0;
-			tex_data[(y*W + x)*3 + 1] = 0;
-			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(0 + water_speed_val * 255), 0, 255);
-		}
-		results.max_value = max_water_speed;
-	}
-	else if(cur_texture_show == TextureShow_SuspendedSediment)
-	{
-		float max_suspended = 0;
-		for(int y=0; y<H; ++y)
-		for(int x=0; x<W; ++x)
-		{
-			const float sediment = sim.terrain_state.elem(x, y).suspended;
-			max_suspended = myMax(max_suspended, sediment);
-			const float sediment_val = sediment / tex_display_max_val;
-
-			tex_data[(y*W + x)*3 + 0] = 100;//(uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(100 + sediment_val * (255-100)), 0, 255);
-			tex_data[(y*W + x)*3 + 2] = 100;//(uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
-			/*const float sediment_r = sim.terrain_state.elem(x, y).suspended[0];
-			const float sediment_g = sim.terrain_state.elem(x, y).suspended[1];
-			const float sediment_b = sim.terrain_state.elem(x, y).suspended[2];
-			max_suspended = myMax(max_suspended, sediment_r);
-			max_suspended = myMax(max_suspended, sediment_g);
-			max_suspended = myMax(max_suspended, sediment_b);
-			const float sediment_val_r = sediment_r / tex_display_max_val;
-			const float sediment_val_g = sediment_g / tex_display_max_val;
-			const float sediment_val_b = sediment_b / tex_display_max_val;
-
-			tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(0 + sediment_val_r * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(0 + sediment_val_g * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(0 + sediment_val_b * 255), 0, 255);*/
-		}
-		results.max_value = max_suspended;
-	}
-	else if(cur_texture_show == TextureShow_DepositedSediment)
-	{
-		float max_sediment = 0;
-		for(int y=0; y<H; ++y)
-		for(int x=0; x<W; ++x)
-		{
-			const float sediment = sim.terrain_state.elem(x, y).deposited_sed;
-			max_sediment = myMax(max_sediment, sediment);
-			const float sediment_val = sediment / tex_display_max_val;
-
-			Colour3f base_col = Colour3f(104, 97, 72) / 255.f; // Colour3f(183, 171, 162) / 255.f;
-			Colour3f sediment_col = Colour3f(71, 105, 72)/ 255.f;
-
-			const Colour3f final_col = Maths::lerp(base_col, sediment_col, myClamp(sediment_val, 0.f, 1.f));
-			/*tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(0 + sediment_val * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 1] = 0;
-			tex_data[(y*W + x)*3 + 2] = 0;*/
-			tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(final_col.r * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(final_col.g * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(final_col.b * 255), 0, 255);
-			/*const float sediment_r = sim.terrain_state.elem(x, y).sediment[0];
-			const float sediment_g = sim.terrain_state.elem(x, y).sediment[1];
-			const float sediment_b = sim.terrain_state.elem(x, y).sediment[2];
-			max_sediment = myMax(max_sediment, sediment_r);
-			max_sediment = myMax(max_sediment, sediment_g);
-			max_sediment = myMax(max_sediment, sediment_b);
-			const float sediment_val_r = sediment_r / tex_display_max_val;
-			const float sediment_val_g = sediment_g / tex_display_max_val;
-			const float sediment_val_b = sediment_b / tex_display_max_val;
-
-			tex_data[(y*W + x)*3 + 0] = (uint8)myClamp<int>((int)(0 + sediment_val_r * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 1] = (uint8)myClamp<int>((int)(0 + sediment_val_g * 255), 0, 255);
-			tex_data[(y*W + x)*3 + 2] = (uint8)myClamp<int>((int)(0 + sediment_val_b * 255), 0, 255);*/
-		}
-		results.max_value = max_sediment;
-	}
-
-	texture->loadIntoExistingTexture(/*mipmap level=*/0, sim.terrain_state.getWidth(), sim.terrain_state.getHeight(), /*row stride B=*/sim.terrain_state.getWidth()*3, tex_data, /*bind needed=*/true);
-
-	return results;
-}
-
-
 void setGLAttribute(SDL_GLattr attr, int value)
 {
 	const int result = SDL_GL_SetAttribute(attr, value);
@@ -663,7 +524,7 @@ void setGLAttribute(SDL_GLattr attr, int value)
 }
 
 
-void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialTerrainShape initial_terrain_shape, float cell_w, float initial_height_scale, float x_scale, float y_scale)
+void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialTerrainShape initial_terrain_shape, float cell_w, float initial_height_scale, float x_scale, float y_scale, float sea_level)
 {
 	const int W = (int)sim.terrain_state.getWidth();
 	const int H = (int)sim.terrain_state.getHeight();
@@ -756,6 +617,18 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 		}
 	}
 
+	// Set water height based on sea level
+	for(int x=0; x<W; ++x)
+	for(int y=0; y<H; ++y)
+	{
+		const float total_terrain_h = sim.terrain_state.elem(x, y).height + sim.terrain_state.elem(x, y).deposited_sed;
+		if(total_terrain_h < sea_level)
+		{
+			sim.terrain_state.elem(x, y).water = sea_level - total_terrain_h;
+		}
+	}
+
+
 	sim.terrain_state_buffer.copyFrom(command_queue, /*src ptr=*/&sim.terrain_state.elem(0, 0), /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
 }
 
@@ -770,7 +643,7 @@ int main(int, char**)
 		// NOTE: OpenGL init needs to go before OpenCL init
 		int W = 1024;
 		int H = 1024;
-		float cell_w = 1;
+		float cell_w = 8192.f / W;
 		Simulation sim(W, H);
 
 
@@ -866,11 +739,11 @@ int main(int, char**)
 
 		Constants constants;
 		constants.delta_t = 0.08f;//0.01f; // time step
-		constants.r = 0.012f; // rainfall rate
+		constants.r = 0.0025f; // 0.012f; // rainfall rate
 		constants.A = 1; // cross-sectional 'pipe' area
 		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
 		constants.l = 1.0; // l = pipe length
-		constants.f = 0.05f; // friction constant
+		constants.f = 1.f; // 0.05f; // friction constant
 		constants.cell_w = cell_w;
 		constants.recip_cell_w = 1.f / cell_w;
 
@@ -878,16 +751,20 @@ int main(int, char**)
 		constants.K_s = 3; // 0.5f; // dissolving constant.
 		constants.K_d = 0.5f; // deposition constant
 		constants.K_dmax = 1.f;
-		constants.K_e = 0.05f; // Evaporation constant
+		constants.q_0 = 0.2f;
+		constants.K_e = 0.001f; // 0.005f; // Evaporation constant
 		constants.K_t = 0.03f; // Thermal erosion constant
 		constants.K_tdep = 0.03f; // thermal erosion constant for deposited sediment
 		constants.max_talus_angle = Maths::pi<float>()/4;
 		constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
-		constants.max_deposited_talus_angle = 0.1f;
+		constants.max_deposited_talus_angle = 0.55f;
 		constants.tan_max_deposited_talus_angle = std::tan(constants.max_deposited_talus_angle);
+		constants.sea_level = -4.f;
 
-		constants.include_water_height = 0;
-		constants.draw_water = 0;
+		constants.include_water_height = 1;
+		constants.draw_water = 1;
+		constants.rock_col = Colour3f(0.7f);
+		constants.sediment_col = Colour3f(0.8f);
 
 		sim.terrain_state_buffer.alloc(opencl_context, /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
 		sim.flow_state_buffer_a.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
@@ -981,22 +858,93 @@ int main(int, char**)
 		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), OpenGLTexture::/*Format_SRGB_Uint8*/Format_RGBA_Linear_Uint8, OpenGLTexture::Filtering_Bilinear);
 
 
-		InitialTerrainShape initial_terrain_shape = InitialTerrainShape::InitialTerrainShape_ConstantSlope;
+		InitialTerrainShape initial_terrain_shape = InitialTerrainShape::InitialTerrainShape_FBM;
 		HeightFieldShow cur_heightfield_show = HeightFieldShow::HeightFieldShow_TerrainOnly;
 		TextureShow cur_texture_show = TextureShow::TextureShow_DepositedSediment;
 		float tex_display_max_val = 1;
-		bool display_water = false;
+		bool display_water = true; // Erosion water
+		bool display_sea = true;
 
-		float initial_height_scale = 0.3f;
+		float initial_height_scale = 0.8f;
 		float noise_x_scale = 3;
 		float noise_y_scale = 3;
-		resetTerrain(sim, command_queue, initial_terrain_shape, cell_w, initial_height_scale, noise_x_scale, noise_y_scale);
+		resetTerrain(sim, command_queue, initial_terrain_shape, cell_w, initial_height_scale, noise_x_scale, noise_y_scale, constants.sea_level);
 
 
 		// Add terrain object
 		GLObjectRef terrain_gl_ob = new GLObject();
 		terrain_gl_ob->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(1.f);// Matrix4f::uniformScaleMatrix(0.002f);
 		terrain_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cell_w, cur_heightfield_show);
+
+
+
+
+		// Add water mesh object
+		//GLObjectRef water_gl_ob = new GLObject();
+		//water_gl_ob->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(1.f);// Matrix4f::uniformScaleMatrix(0.002f);
+		//water_gl_ob->mesh_data = makeTerrainMesh(sim, opengl_engine.ptr(), cell_w, cur_heightfield_show);
+
+
+
+
+
+
+
+
+		const float large_water_quad_w = 1000000;
+		
+		// Add water plane
+		std::vector<GLObjectRef> sea_water_obs;
+		if(true)
+		{
+			OpenGLMaterial water_mat;
+			water_mat.water = true;
+
+			
+			Reference<OpenGLMeshRenderData> quad_meshdata = MeshPrimitiveBuilding::makeQuadMesh(*opengl_engine->vert_buf_allocator, Vec4f(1,0,0,0), Vec4f(0,1,0,0), /*res=*/2);
+			/*for(int y=0; y<16; ++y)
+				for(int x=0; x<16; ++x)
+				{
+					const int offset_x = x - 8;
+					const int offset_y = y - 8;
+					if(!(offset_x == 0 && offset_y == 0))
+					{
+						// Tessellate ground mesh, to avoid texture shimmer due to large quads.
+						GLObjectRef gl_ob = new GLObject();
+						gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, water_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f + offset_x, -0.5f + offset_y, 0);
+						gl_ob->mesh_data = quad_meshdata;
+
+						gl_ob->materials.resize(1);
+						gl_ob->materials[0].albedo_linear_rgb = Colour3f(1,0,0);
+						gl_ob->materials[0] = water_mat;
+						opengl_engine->addObject(gl_ob);
+						sea_water_obs.push_back(gl_ob);
+					}
+				}
+				*/
+			{
+				// Tessellate ground mesh, to avoid texture shimmer due to large quads.
+				GLObjectRef gl_ob = new GLObject();
+				gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
+				gl_ob->mesh_data = MeshPrimitiveBuilding::makeQuadMesh(*opengl_engine->vert_buf_allocator, Vec4f(1,0,0,0), Vec4f(0,1,0,0), /*res=*/64);
+
+				gl_ob->materials.resize(1);
+				//gl_ob->materials[0].albedo_linear_rgb = Colour3f(0,0,1);
+				gl_ob->materials[0] = water_mat;
+				if(display_sea)
+					opengl_engine->addObject(gl_ob);
+				sea_water_obs.push_back(gl_ob);
+			}
+
+			/*GLObjectRef ground_plane = new GLObject();
+			ground_plane->mesh_data = opengl_engine->getUnitQuadMeshData();
+			ground_plane->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(10) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
+			ground_plane->materials.resize(1);
+			ground_plane->materials[0].albedo_texture = opengl_engine->getTexture(base_dir + "/resources/obstacle.png");
+			ground_plane->materials[0].tex_matrix = Matrix2f(10.f, 0, 0, 10.f);*/
+
+			//opengl_engine->addObject(ground_plane);
+		}
 
 		glFinish();
 
@@ -1009,23 +957,45 @@ int main(int, char**)
 
 		sim.terrain_tex_cl_mem = terrain_tex_cl_mem;
 
-		// Get OpenCL buffer for OpenGL mesh vertex buffer
-		const GLuint buffer_name = terrain_gl_ob->mesh_data->vbo_handle.vbo->bufferName();
-		const cl_mem mesh_vert_buffer_cl_mem = getGlobalOpenCL()->clCreateFromGLBuffer(opencl_context->getContext(), CL_MEM_WRITE_ONLY, buffer_name, &retcode);
-		if(retcode != CL_SUCCESS)
-			throw glare::Exception("Failed to create OpenCL buffer for GL buffer: " + OpenCL::errorString(retcode));
+		// Get OpenCL buffer for OpenGL terrain mesh vertex buffer
+		{
+			const GLuint buffer_name = terrain_gl_ob->mesh_data->vbo_handle.vbo->bufferName();
+			const cl_mem mesh_vert_buffer_cl_mem = getGlobalOpenCL()->clCreateFromGLBuffer(opencl_context->getContext(), CL_MEM_WRITE_ONLY, buffer_name, &retcode);
+			if(retcode != CL_SUCCESS)
+				throw glare::Exception("Failed to create OpenCL buffer for GL buffer: " + OpenCL::errorString(retcode));
 
-		sim.heightfield_mesh_buffer = mesh_vert_buffer_cl_mem;
-		sim.heightfield_mesh_offset_B = (uint32)terrain_gl_ob->mesh_data->vbo_handle.offset;
+			sim.heightfield_mesh_buffer = mesh_vert_buffer_cl_mem;
+			sim.heightfield_mesh_offset_B = (uint32)terrain_gl_ob->mesh_data->vbo_handle.offset;
+		}
+
+		
+		// Get OpenCL buffer for OpenGL water mesh vertex buffer
+		/*{
+			const GLuint buffer_name = water_gl_ob->mesh_data->vbo_handle.vbo->bufferName();
+			const cl_mem mesh_vert_buffer_cl_mem = getGlobalOpenCL()->clCreateFromGLBuffer(opencl_context->getContext(), CL_MEM_WRITE_ONLY, buffer_name, &retcode);
+			if(retcode != CL_SUCCESS)
+				throw glare::Exception("Failed to create OpenCL buffer for GL buffer: " + OpenCL::errorString(retcode));
+
+			sim.water_heightfield_mesh_buffer = mesh_vert_buffer_cl_mem;
+			sim.water_heightfield_mesh_offset_B = (uint32)water_gl_ob->mesh_data->vbo_handle.offset;
+		}*/
 		//----------------------------------------------
 		
 
-		UpdateTexResults results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
+		//UpdateTexResults results = updateTerrainTexture(sim, terrain_col_tex, cur_texture_show, tex_display_max_val);
 
 		terrain_gl_ob->materials.resize(1);
 		terrain_gl_ob->materials[0].albedo_texture = terrain_col_tex;
+		terrain_gl_ob->materials[0].fresnel_scale = 0.3f;
+		terrain_gl_ob->materials[0].roughness = 0.8f;
 
 		opengl_engine->addObject(terrain_gl_ob);
+
+
+		//water_gl_ob->materials.resize(1);
+		//water_gl_ob->materials[0].water = true;
+		//opengl_engine->addObject(water_gl_ob);
+
 		
 
 		Timer timer;
@@ -1035,8 +1005,9 @@ int main(int, char**)
 
 		float cam_phi = 0.0;
 		float cam_theta = 1.f;
-		Vec4f cam_target_pos = Vec4f(W / 2.f, H / 2.f, 100, 1);
-		float cam_dist = 500;
+		//Vec4f cam_target_pos = Vec4f(W * cell_w / 2.f, H * cell_w / 2.f, 100, 1);
+		Vec4f cam_pos = Vec4f(W * cell_w / 2.f, H * cell_w / 2.f, 500, 1);
+		//float cam_dist = 500;
 		bool orbit_camera = false;
 
 		bool sim_running = true;
@@ -1063,14 +1034,16 @@ int main(int, char**)
 			}
 
 
-			const Matrix4f T = Matrix4f::translationMatrix(0.f, cam_dist, 0.f);
-			const Matrix4f z_rot = Matrix4f::rotationMatrix(Vec4f(0,0,1,0), cam_phi);
-			const Matrix4f x_rot = Matrix4f::rotationMatrix(Vec4f(1,0,0,0), -(cam_theta - Maths::pi_2<float>()));
+			//const Matrix4f T = Matrix4f::translationMatrix(0.f, cam_dist, 0.f);
+			const Matrix4f z_rot = Matrix4f::rotationAroundZAxis(cam_phi);
+			const Matrix4f x_rot = Matrix4f::rotationAroundXAxis(-(cam_theta - Maths::pi_2<float>()));
 			const Matrix4f rot = x_rot * z_rot;
-			const Matrix4f world_to_camera_space_matrix = T * rot * Matrix4f::translationMatrix(-cam_target_pos);
+			//const Matrix4f world_to_camera_space_matrix = T * rot * Matrix4f::translationMatrix(-cam_target_pos);
+
+			const Matrix4f world_to_camera_space_matrix = rot * Matrix4f::translationMatrix(-cam_pos);
 
 			const float sensor_width = 0.035f;
-			const float lens_sensor_dist = 0.03f;
+			const float lens_sensor_dist = 0.025f;//0.03f;
 			const float render_aspect_ratio = opengl_engine->getViewPortAspectRatio();
 
 
@@ -1094,12 +1067,12 @@ int main(int, char**)
 
 			//ImGui::ShowDemoWindow();
 
-			ImGui::SetNextWindowSize(ImVec2(600, 900));
+			ImGui::SetNextWindowSize(ImVec2(600, 1100));
 			ImGui::Begin("TerrainGen");
 
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation parameters");
 			bool param_changed = false;
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/5.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
@@ -1109,11 +1082,14 @@ int main(int, char**)
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"min unit water dischage (q_0) ", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle (rad) ", /*val=*/&constants.max_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
 			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad) ", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			
+
 			
 			
 			constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
@@ -1121,6 +1097,9 @@ int main(int, char**)
 
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Visualisation");
+
+			param_changed = param_changed || ImGui::ColorEdit3("rock colour", &constants.rock_col.r);
+			param_changed = param_changed || ImGui::ColorEdit3("sediment colour", &constants.sediment_col.r);
 
 			/*if(ImGui::BeginCombo("heightfield showing", HeightFieldShow_strings[cur_heightfield_show]))
 			{
@@ -1137,6 +1116,19 @@ int main(int, char**)
 				ImGui::EndCombo();
 			}*/
 			param_changed = param_changed || ImGui::Checkbox("Display water", &display_water);
+			if(ImGui::Checkbox("Display sea surface", &display_sea))
+			{
+				if(display_sea)
+				{
+					for(size_t i=0; i<sea_water_obs.size(); ++i)
+						opengl_engine->addObject(sea_water_obs[i]);
+				}
+				else
+				{
+					for(size_t i=0; i<sea_water_obs.size(); ++i)
+						opengl_engine->removeObject(sea_water_obs[i]);
+				}
+			}
 
 			if(ImGui::BeginCombo("texture showing", TextureShow_strings[cur_texture_show]))
 			{
@@ -1153,6 +1145,18 @@ int main(int, char**)
 			}
 
 			ImGui::SliderFloat(/*label=*/"Texture display max val", /*val=*/&tex_display_max_val, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+			
+			if(ImGui::InputFloat(/*label=*/"Sea level (m)", /*val=*/&constants.sea_level, /*step=*/1.f, /*step fast=*/10.f, "%.3f"))
+			{
+				// Sea height changed, move water plane
+				param_changed = true;
+
+				for(size_t i=0; i<sea_water_obs.size(); ++i)
+				{
+					sea_water_obs[i]->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
+					opengl_engine->updateObjectTransformData(*sea_water_obs[i]);
+				}
+			}
 
 			ImGui::Checkbox("orbit camera", &orbit_camera);
 
@@ -1216,7 +1220,7 @@ int main(int, char**)
 			ImGui::Text(("Total water volume: " + doubleToStringMaxNDecimalPlaces(stats.total_water_volume, 4) + "m^3").c_str());
 			ImGui::Text(("Total suspended sediment volume: " + doubleToStringMaxNDecimalPlaces(stats.total_suspended_sediment_vol, 4) + "m^3").c_str());
 			ImGui::Text(("Total deposited sediment volume: " + doubleToStringMaxNDecimalPlaces(stats.total_deposited_sediment_vol, 4) + "m^3").c_str());
-			ImGui::Text(("max texture value: " + toString(results.max_value)).c_str());
+			//ImGui::Text(("max texture value: " + toString(results.max_value)).c_str());
 			ImGui::End(); 
 
 			if(param_changed || reset)
@@ -1230,7 +1234,7 @@ int main(int, char**)
 
 			if(reset)
 			{
-				resetTerrain(sim, command_queue, initial_terrain_shape, cell_w, initial_height_scale, noise_x_scale, noise_y_scale);
+				resetTerrain(sim, command_queue, initial_terrain_shape, cell_w, initial_height_scale, noise_x_scale, noise_y_scale, constants.sea_level);
 				stats_last_num_iters = 0;
 				reset = false;
 			}
@@ -1335,33 +1339,36 @@ int main(int, char**)
 					{
 						//conPrint("SDL_BUTTON_MMASK or SDL_BUTTON_RMASK down");
 
-						const float move_scale = 1.f;
-						cam_target_pos += right * -(float)e.motion.xrel * move_scale + up * (float)e.motion.yrel * move_scale;
+						//const float move_scale = 1.f;
+						//cam_target_pos += right * -(float)e.motion.xrel * move_scale + up * (float)e.motion.yrel * move_scale;
 					}
 				}
 				else if(e.type == SDL_MOUSEWHEEL)
 				{
 					//conPrint("SDL_MOUSEWHEEL");
-					cam_dist = myClamp<float>(cam_dist - cam_dist * e.wheel.y * 0.2f, 0.01f, 10000.f);
+					//cam_dist = myClamp<float>(cam_dist - cam_dist * e.wheel.y * 0.2f, 0.01f, 10000.f);
+					const float move_speed = 30.f * cell_w;
+					cam_pos += forwards * (float)e.wheel.y * move_speed;
 				}
 			}
 
 			SDL_PumpEvents();
 			const uint8* keystate = SDL_GetKeyboardState(NULL);
+			const float shift_factor = (keystate[SDL_SCANCODE_LSHIFT] != 0) ? 3.f : 1.f;
 			if(keystate[SDL_SCANCODE_LEFT])
-				cam_phi += dt * 0.25f;
+				cam_phi -= dt * 0.25f * shift_factor;
 			if(keystate[SDL_SCANCODE_RIGHT])
-				cam_phi -= dt * 0.25f;
+				cam_phi += dt * 0.25f * shift_factor;
 
-			const float move_speed = 140.f * cell_w * (keystate[SDL_SCANCODE_LSHIFT] != 0 ? 3.f : 1.f);
+			const float move_speed = 140.f * cell_w * shift_factor;
 			if(keystate[SDL_SCANCODE_W])
-				cam_target_pos += forwards * dt * move_speed;
+				cam_pos += forwards * dt * move_speed;
 			if(keystate[SDL_SCANCODE_S])
-				cam_target_pos -= forwards * dt * move_speed;
+				cam_pos -= forwards * dt * move_speed;
 			if(keystate[SDL_SCANCODE_A])
-				cam_target_pos -= right * dt * move_speed;
+				cam_pos -= right * dt * move_speed;
 			if(keystate[SDL_SCANCODE_D])
-				cam_target_pos += right * dt * move_speed;
+				cam_pos += right * dt * move_speed;
 		}
 		SDL_Quit();
 		return 0;

@@ -68,6 +68,7 @@ typedef struct
 	float K_s;// = 0.01; // 0.5; // dissolving constant.
 	float K_d;// = 0.01; // 1; // deposition constant
 	float K_dmax;// = 0.1f; // Maximum erosion depth: water depth at which erosion stops.
+	float q_0; // Minimum unit water discharge for sediment carrying.
 	float K_e; // Evaporation constant
 
 	float K_t; // thermal erosion constant
@@ -76,10 +77,14 @@ typedef struct
 	float tan_max_talus_angle;
 	float max_deposited_talus_angle;
 	float tan_max_deposited_talus_angle;
+	float sea_level;
 
 	// Draw options:
 	int include_water_height;
 	int draw_water;
+
+	float rock_col[3];
+	float sediment_col[3];
 } Constants;
 
 
@@ -145,7 +150,8 @@ __kernel void flowSimulationKernel(
 	const float friction_factor = (1.0f - constants->f * constants->delta_t / h_p);
 
 	// Assume pipe width = pipe length (w = l), so w/l factor in flux deriv = 1.
-	const float flux_factor = constants->delta_t * h_p * constants->g;
+	const float flux_factor = constants->delta_t * min(5.0f, h_p) * constants->g; // TEMP HACK use max value for pipe height.  Suppresses water oscillations in deep water.
+	// TODO: Work out the correct behaviour here.
 	float f_L_next = max(0.f, flow_state_middle->f_L * friction_factor  +  flux_factor * delta_h_L); // If this cell is higher than left cell, delta_h_L is positive
 	float f_T_next = max(0.f, flow_state_middle->f_T * friction_factor  +  flux_factor * delta_h_T);
 	float f_R_next = max(0.f, flow_state_middle->f_R * friction_factor  +  flux_factor * delta_h_R);
@@ -583,6 +589,15 @@ __kernel void waterAndVelFieldUpdateKernel(
 	//	v *= scale;
 	//}
 
+	// Sea boundary conditions:
+	// If this is an edge cell, and if terrain level is below sea level, set water height so that the total terrain + water height = sea level.
+	if((x == 0) || (x == W-1) || (y == 0) || (y == H-1))
+	{
+		const float total_terrain_h = terrain_state_middle->height + terrain_state_middle->deposited_sed;
+		if(total_terrain_h < constants->sea_level)
+			d_2 = constants->sea_level - total_terrain_h;
+	}
+
 	terrain_state_middle->water = d_2;
 #if !DO_SEMILAGRANGIAN_ADVECTION
 	terrain_state_middle->suspended_vol = new_suspended_vol;
@@ -658,8 +673,11 @@ __kernel void erosionAndDepositionKernel(
 	//const float C = 0.001f * constants->K_c * v_len;
 	//const float q = v_len * max(0.f, min(water_d, 1.0f));
 	//const float q = min(square(constants->cell_w), water_flux); //fabs(state_middle->u) + fabs(state_middle->v)); // unit water discharge (water flux per unit width of stream?)  (m^3 s^-1 / m = m^2 s^-1)
-	const float q = state_middle->water_vel * water_d;//min(10.0f, water_flux / constants->cell_w);
-	const float q_to_gamma = q;//square(q);
+	const float q = state_middle->water_vel * min(water_d, constants->K_dmax);//min(10.0f, water_flux / constants->cell_w);
+	float q_to_gamma = q;//square(q);
+
+	q_to_gamma = max(0.f, q_to_gamma - constants->q_0);
+
 	//const float S = use_sin_alpha;
 	//const float S_to_beta = pow(S, 1.5f);
 	const float unit_C = constants->K_c /** S_to_beta*/ * q_to_gamma; // m^2 s^-1
@@ -1085,7 +1103,8 @@ __kernel void evaporationKernel(
 
 	__global       TerrainState* const state_middle   = &terrain_state[x         + y          *W];
 
-	const float d_new = state_middle->water * (1 - constants->K_e * constants->delta_t);
+	//const float d_new = state_middle->water * (1 - constants->K_e * constants->delta_t);
+	const float d_new = max(0.f, state_middle->water - constants->K_e * constants->delta_t); // Make evaporation rate not depend on water depth
 
 	state_middle->water = d_new;
 }
@@ -1109,19 +1128,23 @@ __kernel void setHeightFieldMeshKernel(
 	__global Vertex* restrict const vertex_buffer,
 	unsigned int vertex_buffer_offset_B,
 	write_only image2d_t terrain_texture
+	//__global Vertex* restrict const water_vertex_buffer,
+	//unsigned int water_vertex_buffer_offset_B
 )
 {
 	const int x = get_global_id(0);
 	const int y = get_global_id(1);
 
-	__global Vertex* mesh_vert_0 = &vertex_buffer[vertex_buffer_offset_B / sizeof(Vertex)];
+	__global Vertex*       mesh_vert_0 = &      vertex_buffer[      vertex_buffer_offset_B / sizeof(Vertex)];
+	//__global Vertex* water_mesh_vert_0 = &water_vertex_buffer[water_vertex_buffer_offset_B / sizeof(Vertex)];
 
 	int vert_xres = max(2, W);
 	int vert_yres = max(2, H);
 	int quad_xres = vert_xres - 1; // Number of quads in x and y directions
 	int quad_yres = vert_yres - 1; // Number of quads in x and y directions
 
-	__global Vertex* mesh_vert = &mesh_vert_0[x + y * vert_xres];
+	__global Vertex*       mesh_vert = &      mesh_vert_0[x + y * vert_xres];
+	//__global Vertex* water_mesh_vert = &water_mesh_vert_0[x + y * vert_xres];
 
 	float quad_w_x = constants->cell_w; // Width in metres of each quad
 	float quad_w_y = quad_w_x;
@@ -1142,41 +1165,79 @@ __kernel void setHeightFieldMeshKernel(
 	const int src_y = min(y, max_src_y);
 	const int src_x_1 = min(x + 1, max_src_x);
 	const int src_y_1 = min(y + 1, max_src_y);
-	const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W], constants->include_water_height);
-	const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W], constants->include_water_height);
-	const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W], constants->include_water_height);
+	{
+		const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W], constants->include_water_height);
+		const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W], constants->include_water_height);
+		const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W], constants->include_water_height);
 
-	const float3 p_dx_minus_p = (float3)(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
-	const float3 p_dy_minus_p = (float3)(0, dy, z_dy - z);
+		const float3 p_dx_minus_p = (float3)(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
+		const float3 p_dy_minus_p = (float3)(0, dy, z_dy - z);
 
-	const float3 normal = normalize(cross(p_dx_minus_p, p_dy_minus_p));
+		const float3 normal = normalize(cross(p_dx_minus_p, p_dy_minus_p));
 
-	const float3 pos = (float3)(p_x, p_y, z);
-	mesh_vert->pos[0] = p_x;
-	mesh_vert->pos[1] = p_y;
-	mesh_vert->pos[2] = z;
+		mesh_vert->pos[0] = p_x;
+		mesh_vert->pos[1] = p_y;
+		mesh_vert->pos[2] = z;
 
-	mesh_vert->normal[0] = normal.x;
-	mesh_vert->normal[1] = normal.y;
-	mesh_vert->normal[2] = normal.z;
+		mesh_vert->normal[0] = normal.x;
+		mesh_vert->normal[1] = normal.y;
+		mesh_vert->normal[2] = normal.z;
+	}
 
+
+	// Set water mesh
+	/*{
+		const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W], true); // constants->include_water_height);
+		const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W], true); // constants->include_water_height);
+		const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W], true); // constants->include_water_height);
+
+		const float3 p_dx_minus_p = (float3)(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
+		const float3 p_dy_minus_p = (float3)(0, dy, z_dy - z);
+
+		const float3 normal = normalize(cross(p_dx_minus_p, p_dy_minus_p));
+
+		const float water_display_z_bias = -0.2f;
+		water_mesh_vert->pos[0] = p_x;
+		water_mesh_vert->pos[1] = p_y;
+		water_mesh_vert->pos[2] = z + water_display_z_bias;
+
+		water_mesh_vert->normal[0] = normal.x;
+		water_mesh_vert->normal[1] = normal.y;
+		water_mesh_vert->normal[2] = normal.z;
+	}*/
 
 	// Write to terrain texture
-	const float3 rock_col = pow((float3)(64.0 / 255.0, 60.0 / 255.0, 45 / 255.0), 2.2); // brown
-	const float3 deposited_col = pow((float3)(103 / 255.0, 91 / 255.0, 67 / 255.0), 2.2); // lighter orange brown
+	//const float3 rock_col = pow((float3)(64.0 / 255.0, 60.0 / 255.0, 45 / 255.0), 2.2); // brown
+	//const float3 deposited_col = pow((float3)(103 / 255.0, 91 / 255.0, 67 / 255.0), 2.2); // lighter orange brown
 	//const float3 deposited_col = pow((float3)(103 / 255.0, 121 / 255.0, 67 / 255.0), 2.2); // lighter orange brown
+	const float3 rock_col = (float3)(constants->rock_col[0], constants->rock_col[1], constants->rock_col[2]);
+	const float3 deposited_col = (float3)(constants->sediment_col[0], constants->sediment_col[1], constants->sediment_col[2]);
+
 	const float3 snow_col = (float3)(0.95f);
 	const float3 water_col = (float3)(0,0,1.f);
 
 
 	const float water_h = terrain_state[src_x   + src_y  *W].water;
+
+	float3 extinction = (float3)(1.0, 0.10, 0.1) * 2;
+	float3 exp_optical_depth = constants->draw_water ? exp(extinction * -water_h) : 1.f;
+	
+
 	const float water_frac = constants->draw_water ? (1.f - exp(-2.f * water_h)) : 0.f;
 
-	const float3 final_col = mix(
-		mix(rock_col, deposited_col, smoothstep(0.f, 0.3f, terrain_state[src_x   + src_y  *W].deposited_sed)),
-		water_col,
-		water_frac
-	);
+	const float3 ground_col = mix(rock_col, deposited_col, smoothstep(0.f, 0.3f, terrain_state[src_x   + src_y  *W].deposited_sed));
+	
+	float3 attentuated_ground_col = ground_col * exp_optical_depth;
+
+	float3 inscatter_radiance_sigma_s_over_sigma_t = (float3)(1000000.0, 10000000.0, 30000000.0) * 0.000000003f;
+	float3 inscattering = inscatter_radiance_sigma_s_over_sigma_t * ((float3)(1.0) - exp_optical_depth);
+
+	const float3 final_col = attentuated_ground_col + inscattering;
+	//const float3 final_col = mix(
+	//	,
+	//	water_col,
+	//	water_frac
+	//);
 
 	write_imagef(terrain_texture, (int2)(x, y), (float4)(final_col, 1.f));
 }
