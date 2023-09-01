@@ -618,8 +618,8 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 	}
 
 	// Set water height based on sea level
-	for(int x=0; x<W; ++x)
 	for(int y=0; y<H; ++y)
+	for(int x=0; x<W; ++x)
 	{
 		const float total_terrain_h = sim.terrain_state.elem(x, y).height + sim.terrain_state.elem(x, y).deposited_sed;
 		if(total_terrain_h < sea_level)
@@ -630,6 +630,52 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 
 
 	sim.terrain_state_buffer.copyFrom(command_queue, /*src ptr=*/&sim.terrain_state.elem(0, 0), /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
+}
+
+
+void saveHeightfieldToDisk(Simulation& sim, OpenCLCommandQueueRef command_queue)
+{
+	sim.readBackToCPUMem(command_queue);
+
+	try
+	{
+		// Save heightfield
+		{
+			std::vector<float> heightfield(sim.W * sim.H);
+			for(int y=0; y<sim.H; ++y)
+			for(int x=0; x<sim.W; ++x)
+				heightfield[x + y * sim.W] = sim.terrain_state.elem(x, y).height;
+
+			EXRDecoder::SaveOptions options;
+			EXRDecoder::saveImageToEXR(heightfield.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "heightfield.exr", /*layer name=*/"", options);
+		}
+	
+		// Save a map of deposited sediment
+		{
+			std::vector<float> sediment_map(sim.W * sim.H);
+			for(int y=0; y<sim.H; ++y)
+			for(int x=0; x<sim.W; ++x)
+				sediment_map[x + y * sim.W] = sim.terrain_state.elem(x, y).deposited_sed;
+
+			EXRDecoder::SaveOptions options;
+			EXRDecoder::saveImageToEXR(sediment_map.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "sediment_map.exr", /*layer name=*/"", options);
+		}
+
+		// Save water map
+		{
+			std::vector<float> water_map(sim.W * sim.H);
+			for(int y=0; y<sim.H; ++y)
+				for(int x=0; x<sim.W; ++x)
+					water_map[x + y * sim.W] = sim.terrain_state.elem(x, y).water;
+
+			EXRDecoder::SaveOptions options;
+			EXRDecoder::saveImageToEXR(water_map.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "water.exr", /*layer name=*/"", options);
+		}
+	}
+	catch(glare::Exception& e)
+	{
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Failed to save", ("Failed to save heightfield or texture to disk: " + e.what()).c_str(), /*parent=*/NULL);
+	}
 }
 
 
@@ -1203,6 +1249,11 @@ int main(int, char**)
 			ImGui::SliderFloat(/*label=*/"Initial height scale", /*val=*/&initial_height_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
 			ImGui::SliderFloat(/*label=*/"Noise x scale", /*val=*/&noise_x_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
 			ImGui::SliderFloat(/*label=*/"Noise y scale", /*val=*/&noise_y_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+
+			if(ImGui::Button("Save heightfield to disk"))
+			{
+				saveHeightfieldToDisk(sim, command_queue);
+			}
 
 
 			ImGui::Dummy(ImVec2(100, 20));
