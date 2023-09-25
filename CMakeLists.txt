@@ -12,6 +12,7 @@ add_definitions(-DPNG_INTEL_SSE=1)
 add_definitions(-DPNG_NO_SETJMP=1)
 
 add_definitions(-DBUILD_TESTS=1)
+add_definitions(-DOPENCL_OPENGL_INTEROP=1)
 
 
 if(WIN32)

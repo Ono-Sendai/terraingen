@@ -11,6 +11,7 @@ Copyright Nicholas Chapman 2023 -
 #include <maths/GeometrySampling.h>
 #include <dll/include/IndigoMesh.h>
 #include <graphics/PerlinNoise.h>
+#include <graphics/SRGBUtils.h>
 #include <opengl/OpenGLShader.h>
 #include <opengl/OpenGLProgram.h>
 #include <opengl/OpenGLEngine.h>
@@ -36,7 +37,6 @@ Copyright Nicholas Chapman 2023 -
 #include <imgui.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <backends/imgui_impl_sdl.h>
-#include <iostream>
 #include <fstream>
 #include <string>
 
@@ -91,11 +91,13 @@ typedef struct
 	float max_deposited_talus_angle;
 	float tan_max_deposited_talus_angle;
 	float sea_level;
+	float current_time;
 
 	int include_water_height;
 	int draw_water;
 	Colour3f rock_col;
 	Colour3f sediment_col;
+	Colour3f vegetation_col;
 } Constants;
 
 
@@ -596,7 +598,7 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 
 			//sim.terrain_state.elem(x, y).height = r < (W/4.0) ? 100.f : 0.f;
 
-			const float perlin_factor = PerlinNoise::FBM(nx * x_scale, ny * y_scale, 5);
+			const float perlin_factor = PerlinNoise::FBM(nx * x_scale, ny * y_scale, 12);
 			//const float perlin_factor = PerlinNoise::ridgedFBM<float>(Vec4f(nx * 0.5f, ny * 0.5f, 0, 1), 1, 2, 5);
 			sim.terrain_state.elem(x, y).height = myMax(-100.f, perlin_factor)/3.f * W / 5.0f * total_vert_scale;// * myMax(1 - (1.1f * r / ((float)W/2)), 0.f) * 200.f;
 			//sim.terrain_state.elem(x, y).height = nx < 0.25 ? 0 : (nx < 0.5 ? (nx - 0.25) : (1.0f - (nx-0.25)) * 200.f;
@@ -628,8 +630,20 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, InitialT
 		}
 	}
 
-
+	// Upload to GPU
 	sim.terrain_state_buffer.copyFrom(command_queue, /*src ptr=*/&sim.terrain_state.elem(0, 0), /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
+}
+
+
+void saveStructMemberToEXR(Simulation& sim, const std::string& exr_path, size_t member_offset_B)
+{
+	std::vector<float> data(sim.W * sim.H);
+	for(int y=0; y<sim.H; ++y)
+	for(int x=0; x<sim.W; ++x)
+		data[x + y * sim.W] = *(float*)((uint8*)&sim.terrain_state.elem(x, y) + member_offset_B);
+
+	EXRDecoder::SaveOptions options;
+	EXRDecoder::saveImageToEXR(data.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, exr_path, /*layer name=*/"", options);
 }
 
 
@@ -640,42 +654,79 @@ void saveHeightfieldToDisk(Simulation& sim, OpenCLCommandQueueRef command_queue)
 	try
 	{
 		// Save heightfield
-		{
-			std::vector<float> heightfield(sim.W * sim.H);
-			for(int y=0; y<sim.H; ++y)
-			for(int x=0; x<sim.W; ++x)
-				heightfield[x + y * sim.W] = sim.terrain_state.elem(x, y).height;
+		saveStructMemberToEXR(sim, "heightfield.exr", offsetof(TerrainState, height));
 
-			EXRDecoder::SaveOptions options;
-			EXRDecoder::saveImageToEXR(heightfield.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "heightfield.exr", /*layer name=*/"", options);
-		}
-	
 		// Save a map of deposited sediment
+		saveStructMemberToEXR(sim, "sediment_map.exr", offsetof(TerrainState, deposited_sed));
+
 		{
-			std::vector<float> sediment_map(sim.W * sim.H);
+			std::vector<float> data(sim.W * sim.H);
 			for(int y=0; y<sim.H; ++y)
 			for(int x=0; x<sim.W; ++x)
-				sediment_map[x + y * sim.W] = sim.terrain_state.elem(x, y).deposited_sed;
+				data[x + y * sim.W] = sim.terrain_state.elem(x, y).height + sim.terrain_state.elem(x, y).deposited_sed;
 
 			EXRDecoder::SaveOptions options;
-			EXRDecoder::saveImageToEXR(sediment_map.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "sediment_map.exr", /*layer name=*/"", options);
+			EXRDecoder::saveImageToEXR(data.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "heightfield_with_deposited_sed.exr", /*layer name=*/"", options);
 		}
 
-		// Save water map
-		{
-			std::vector<float> water_map(sim.W * sim.H);
-			for(int y=0; y<sim.H; ++y)
-				for(int x=0; x<sim.W; ++x)
-					water_map[x + y * sim.W] = sim.terrain_state.elem(x, y).water;
-
-			EXRDecoder::SaveOptions options;
-			EXRDecoder::saveImageToEXR(water_map.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, "water.exr", /*layer name=*/"", options);
-		}
+		// Save a map of deposited sediment
+		saveStructMemberToEXR(sim, "water.exr", offsetof(TerrainState, water));
 	}
 	catch(glare::Exception& e)
 	{
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Failed to save", ("Failed to save heightfield or texture to disk: " + e.what()).c_str(), /*parent=*/NULL);
 	}
+}
+
+
+void saveColourTextureToDisk(Simulation& sim, OpenCLCommandQueueRef command_queue, OpenGLTextureRef terrain_col_tex)
+{
+	command_queue->finish();
+	glFinish();
+
+	ImageMapUInt8 map(sim.W, sim.H, 4);
+	terrain_col_tex->readBackTexture(/*mipmap level=*/0, ArrayRef<uint8>(map.getData(), map.getDataSize()));
+
+	PNGDecoder::write(map, "colour.png");
+}
+
+
+void loadStructMemberFromEXR(Simulation& sim, const std::string& exr_path, size_t member_offset_B)
+{
+	Reference<Map2D> map = EXRDecoder::decode(exr_path);
+
+	if(map.isType<ImageMapFloat>())
+	{
+		ImageMapFloatRef image_map = map.downcast<ImageMapFloat>();
+
+		if(image_map->getWidth() != sim.W)
+			throw glare::Exception("Width does not match");
+		if(image_map->getHeight() != sim.H)
+			throw glare::Exception("Height does not match");
+
+		for(int y=0; y<sim.H; ++y)
+			for(int x=0; x<sim.W; ++x)
+				*((float*)((uint8*)&sim.terrain_state.elem(x, y) + member_offset_B)) = image_map->getPixel(x, y)[0];
+	}
+	else
+		throw glare::Exception("Unhandled image type");
+}
+
+
+void loadHeightfieldFromDisk(Simulation& sim, OpenCLCommandQueueRef command_queue)
+{
+	conPrint("Loading heightfield from disk...");
+
+	loadStructMemberFromEXR(sim, "heightfield.exr", offsetof(TerrainState, height));
+
+	loadStructMemberFromEXR(sim, "sediment_map.exr", offsetof(TerrainState, deposited_sed));
+
+	loadStructMemberFromEXR(sim, "water.exr", offsetof(TerrainState, water));
+
+	// Upload to GPU
+	sim.terrain_state_buffer.copyFrom(command_queue, /*src ptr=*/&sim.terrain_state.elem(0, 0), /*size=*/sim.W * sim.H * sizeof(TerrainState), CL_MEM_READ_WRITE);
+
+	conPrint("done.");
 }
 
 
@@ -686,30 +737,32 @@ int main(int, char**)
 	try
 	{
 		//=========================== Init SDL and OpenGL ================================
+		if(SDL_Init(SDL_INIT_VIDEO) != 0)
+			throw glare::Exception("SDL_Init Error: " + std::string(SDL_GetError()));
+
+
+		// Set GL attributes, needs to be done before window creation.
+		setGLAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4); // We need to request a specific version for a core profile.
+		setGLAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
+		setGLAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+
+		setGLAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
+
+
 		// NOTE: OpenGL init needs to go before OpenCL init
-		int W = 1024;
-		int H = 1024;
+		int W = 512;
+		int H = 512;
 		float cell_w = 8192.f / W;
 		Simulation sim(W, H);
 
 
-		//int primary_W = 1680;
-		//int primary_H = 1000;
-		int primary_W = 1280;
-		int primary_H = 720;
-		uint32 window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
+		int primary_W = 1920;
+		int primary_H = 1080;
 
-		conPrint("Using primary window resolution   " + toString(primary_W) + " x " + toString(primary_H));
-
-		SDL_Window* win = SDL_CreateWindow("TerrainGen", 100, 100, 1920, 1080, window_flags | SDL_WINDOW_RESIZABLE);
+		SDL_Window* win = SDL_CreateWindow("TerrainGen", 100, 100, primary_W, primary_H, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 		if(win == nullptr)
 			throw glare::Exception("SDL_CreateWindow Error: " + std::string(SDL_GetError()));
 
-		//setGLAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-		//setGLAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-		setGLAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-
-		setGLAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 
 		SDL_GLContext gl_context = SDL_GL_CreateContext(win);
 		if(!gl_context)
@@ -806,11 +859,13 @@ int main(int, char**)
 		constants.max_deposited_talus_angle = 0.55f;
 		constants.tan_max_deposited_talus_angle = std::tan(constants.max_deposited_talus_angle);
 		constants.sea_level = -4.f;
+		constants.current_time = 0;
 
 		constants.include_water_height = 1;
 		constants.draw_water = 1;
-		constants.rock_col = Colour3f(0.7f);
-		constants.sediment_col = Colour3f(0.8f);
+		constants.rock_col       = toLinearSRGB(Colour3f(63 / 255.f, 56 / 255.f, 51 / 255.f));
+		constants.sediment_col   = toLinearSRGB(Colour3f(105 / 255.f, 97 / 255.f, 88 / 255.f));
+		constants.vegetation_col = toLinearSRGB(Colour3f(27 / 255.f, 58 / 255.f, 37 / 255.f));
 
 		sim.terrain_state_buffer.alloc(opencl_context, /*size=*/W * H * sizeof(TerrainState), CL_MEM_READ_WRITE);
 		sim.flow_state_buffer_a.alloc(opencl_context, W * H * sizeof(FlowState), CL_MEM_READ_WRITE);
@@ -831,11 +886,6 @@ int main(int, char**)
 	
 
 		
-
-
-		
-
-
 		// Initialise ImGUI
 		ImGui::CreateContext();
 
@@ -849,22 +899,20 @@ int main(int, char**)
 		settings.shadow_mapping = true;
 		settings.depth_fog = true;
 		Reference<OpenGLEngine> opengl_engine = new OpenGLEngine(settings);
-		opengl_engine->are_8bit_textures_sRGB = true;
 
 		TextureServer* texture_server = new TextureServer(/*use_canonical_path_keys=*/false);
 
 		const std::string base_src_dir(BASE_SOURCE_DIR);
-		//const std::string indigo_trunk_dir(INDIGO_TRUNK);
 
-		const std::string data_dir = "N:\\glare-core\\trunk/opengl";
+		const std::string data_dir = PlatformUtils::getEnvironmentVariable("GLARE_CORE_TRUNK_DIR") + "/opengl";
 		StandardPrintOutput print_output;
 		opengl_engine->initialise(data_dir, texture_server, &print_output);
+		if(!opengl_engine->initSucceeded())
+			throw glare::Exception("OpenGL init failed: " + opengl_engine->getInitialisationErrorMsg());
 		opengl_engine->setViewport(primary_W, primary_H);
 		opengl_engine->setMainViewport(primary_W, primary_H);
 
-		const std::string base_dir = ".";//base_src_dir;
-
-		std::cout << "Finished compiling and linking program." << std::endl;
+		const std::string base_dir = ".";
 
 
 		const float sun_phi = 1.f;
@@ -877,11 +925,6 @@ int main(int, char**)
 		*/
 		{
 			OpenGLMaterial env_mat;
-			env_mat.albedo_texture = opengl_engine->getTexture(base_dir + "/resources/sky_no_sun.exr");
-			env_mat.albedo_texture->setTWrappingEnabled(false); // Disable wrapping in vertical direction to avoid grey dot straight up.
-			
-			env_mat.tex_matrix = Matrix2f(-1 / Maths::get2Pi<float>(), 0, 0, 1 / Maths::pi<float>());
-
 			opengl_engine->setEnvMat(env_mat);
 		}
 
@@ -900,8 +943,8 @@ int main(int, char**)
 			//opengl_engine->addObject(ground_plane);
 		}
 
-
-		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), OpenGLTexture::/*Format_SRGB_Uint8*/Format_RGBA_Linear_Uint8, OpenGLTexture::Filtering_Bilinear);
+		// NOTE: OpenGLTexture::Format_SRGBA_Uint8 doesn't seem to work on AMD Gpus (rx480 in particular), gives CL_INVALID_IMAGE_FORMAT_DESCRIPTOR.
+		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), /*OpenGLTexture::Format_SRGBA_Uint8*/OpenGLTexture::Format_RGBA_Linear_Uint8, OpenGLTexture::Filtering_Bilinear);
 
 
 		InitialTerrainShape initial_terrain_shape = InitialTerrainShape::InitialTerrainShape_FBM;
@@ -915,6 +958,9 @@ int main(int, char**)
 		float noise_x_scale = 3;
 		float noise_y_scale = 3;
 		resetTerrain(sim, command_queue, initial_terrain_shape, cell_w, initial_height_scale, noise_x_scale, noise_y_scale, constants.sea_level);
+
+		//TEMP:
+		//loadHeightfieldFromDisk(sim, command_queue);
 
 
 		// Add terrain object
@@ -1073,11 +1119,8 @@ int main(int, char**)
 				cam_phi = (float)(timer.elapsed() * 0.1);
 			
 
-			//TEMP:
 			if(SDL_GL_MakeCurrent(win, gl_context) != 0)
-			{
-				std::cout << "SDL_GL_MakeCurrent failed." << std::endl;
-			}
+				conPrint("SDL_GL_MakeCurrent failed.");
 
 
 			//const Matrix4f T = Matrix4f::translationMatrix(0.f, cam_dist, 0.f);
@@ -1146,6 +1189,7 @@ int main(int, char**)
 
 			param_changed = param_changed || ImGui::ColorEdit3("rock colour", &constants.rock_col.r);
 			param_changed = param_changed || ImGui::ColorEdit3("sediment colour", &constants.sediment_col.r);
+			param_changed = param_changed || ImGui::ColorEdit3("vegetaton colour", &constants.vegetation_col.r);
 
 			/*if(ImGui::BeginCombo("heightfield showing", HeightFieldShow_strings[cur_heightfield_show]))
 			{
@@ -1255,6 +1299,11 @@ int main(int, char**)
 				saveHeightfieldToDisk(sim, command_queue);
 			}
 
+			if(ImGui::Button("Save colour texture to disk"))
+			{
+				saveColourTextureToDisk(sim, command_queue, terrain_col_tex);
+			}
+
 
 			ImGui::Dummy(ImVec2(100, 20));
 			reset = ImGui::Button("Reset terrain") || reset;
@@ -1271,15 +1320,17 @@ int main(int, char**)
 			ImGui::Text(("Total water volume: " + doubleToStringMaxNDecimalPlaces(stats.total_water_volume, 4) + "m^3").c_str());
 			ImGui::Text(("Total suspended sediment volume: " + doubleToStringMaxNDecimalPlaces(stats.total_suspended_sediment_vol, 4) + "m^3").c_str());
 			ImGui::Text(("Total deposited sediment volume: " + doubleToStringMaxNDecimalPlaces(stats.total_deposited_sediment_vol, 4) + "m^3").c_str());
+			ImGui::Text(("cam position: " + cam_pos.toStringMaxNDecimalPlaces(1)).c_str());
 			//ImGui::Text(("max texture value: " + toString(results.max_value)).c_str());
 			ImGui::End(); 
 
-			if(param_changed || reset)
+			//if(param_changed || reset)
 			{
 				constants.draw_water = display_water;
 				constants.include_water_height = display_water;
 				constants.cell_w = cell_w;
 				constants.recip_cell_w = 1.f / cell_w;
+				constants.current_time = sim.sim_iteration * constants.delta_t;
 				sim.constants_buffer.copyFrom(command_queue, &constants, sizeof(Constants), /*blocking write=*/true);
 			}
 
@@ -1426,7 +1477,8 @@ int main(int, char**)
 	}
 	catch(glare::Exception& e)
 	{
-		std::cout << e.what() << std::endl;
+		stdErrPrint(e.what());
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", e.what().c_str(), /*parent=*/NULL);
 		return 1;
 	}
 }

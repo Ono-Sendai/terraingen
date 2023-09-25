@@ -78,6 +78,7 @@ typedef struct
 	float max_deposited_talus_angle;
 	float tan_max_deposited_talus_angle;
 	float sea_level;
+	float current_time;
 
 	// Draw options:
 	int include_water_height;
@@ -85,6 +86,7 @@ typedef struct
 
 	float rock_col[3];
 	float sediment_col[3];
+	float vegetation_col[3];
 } Constants;
 
 
@@ -593,9 +595,12 @@ __kernel void waterAndVelFieldUpdateKernel(
 	// If this is an edge cell, and if terrain level is below sea level, set water height so that the total terrain + water height = sea level.
 	if((x == 0) || (x == W-1) || (y == 0) || (y == H-1))
 	{
+		float sea_level = constants->sea_level;
+		if(x == 0)
+			sea_level = constants->sea_level + sin(constants->current_time) * 6.0;
 		const float total_terrain_h = terrain_state_middle->height + terrain_state_middle->deposited_sed;
-		if(total_terrain_h < constants->sea_level)
-			d_2 = constants->sea_level - total_terrain_h;
+		if(total_terrain_h < sea_level)
+			d_2 = sea_level - total_terrain_h;
 	}
 
 	terrain_state_middle->water = d_2;
@@ -1165,24 +1170,23 @@ __kernel void setHeightFieldMeshKernel(
 	const int src_y = min(y, max_src_y);
 	const int src_x_1 = min(x + 1, max_src_x);
 	const int src_y_1 = min(y + 1, max_src_y);
-	{
-		const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W], constants->include_water_height);
-		const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W], constants->include_water_height);
-		const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W], constants->include_water_height);
+	
+	const float z    = totalTerrainHeight(&terrain_state[src_x   + src_y  *W], constants->include_water_height);
+	const float z_dx = totalTerrainHeight(&terrain_state[src_x_1 + src_y  *W], constants->include_water_height);
+	const float z_dy = totalTerrainHeight(&terrain_state[src_x   + src_y_1*W], constants->include_water_height);
 
-		const float3 p_dx_minus_p = (float3)(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
-		const float3 p_dy_minus_p = (float3)(0, dy, z_dy - z);
+	const float3 p_dx_minus_p = (float3)(dx, 0, z_dx - z); // p(p_x + dx, dy) - p(p_x, p_y) = (p_x + dx, d_y, z_dx) - (p_x, p_y, z) = (d_x, 0, z_dx - z)
+	const float3 p_dy_minus_p = (float3)(0, dy, z_dy - z);
 
-		const float3 normal = normalize(cross(p_dx_minus_p, p_dy_minus_p));
+	const float3 normal = normalize(cross(p_dx_minus_p, p_dy_minus_p));
 
-		mesh_vert->pos[0] = p_x;
-		mesh_vert->pos[1] = p_y;
-		mesh_vert->pos[2] = z;
+	mesh_vert->pos[0] = p_x;
+	mesh_vert->pos[1] = p_y;
+	mesh_vert->pos[2] = z;
 
-		mesh_vert->normal[0] = normal.x;
-		mesh_vert->normal[1] = normal.y;
-		mesh_vert->normal[2] = normal.z;
-	}
+	mesh_vert->normal[0] = normal.x;
+	mesh_vert->normal[1] = normal.y;
+	mesh_vert->normal[2] = normal.z;
 
 
 	// Set water mesh
@@ -1212,6 +1216,7 @@ __kernel void setHeightFieldMeshKernel(
 	//const float3 deposited_col = pow((float3)(103 / 255.0, 121 / 255.0, 67 / 255.0), 2.2); // lighter orange brown
 	const float3 rock_col = (float3)(constants->rock_col[0], constants->rock_col[1], constants->rock_col[2]);
 	const float3 deposited_col = (float3)(constants->sediment_col[0], constants->sediment_col[1], constants->sediment_col[2]);
+	const float3 vegetation_col = (float3)(constants->vegetation_col[0], constants->vegetation_col[1], constants->vegetation_col[2]);
 
 	const float3 snow_col = (float3)(0.95f);
 	const float3 water_col = (float3)(0,0,1.f);
@@ -1225,7 +1230,11 @@ __kernel void setHeightFieldMeshKernel(
 
 	const float water_frac = constants->draw_water ? (1.f - exp(-2.f * water_h)) : 0.f;
 
-	const float3 ground_col = mix(rock_col, deposited_col, smoothstep(0.f, 0.3f, terrain_state[src_x   + src_y  *W].deposited_sed));
+	const float3 rock_sed_col = mix(rock_col, deposited_col, smoothstep(0.f, 0.3f, terrain_state[src_x   + src_y  *W].deposited_sed));
+
+	const float vegetation_frac = smoothstep(0.4f, 0.8f, normal.z) * (1.f - smoothstep(0.5f, 0.7f, water_h));
+
+	const float3 ground_col = mix(rock_sed_col, vegetation_col, vegetation_frac);
 	
 	float3 attentuated_ground_col = ground_col * exp_optical_depth;
 
