@@ -1,7 +1,7 @@
 /*=====================================================================
 terraingen.cpp
 --------------
-Copyright Nicholas Chapman 2023 -
+Copyright Nicholas Chapman 2024 -
 =====================================================================*/
 
 
@@ -36,7 +36,7 @@ Copyright Nicholas Chapman 2023 -
 #include <SDL.h>
 #include <imgui.h>
 #include <backends/imgui_impl_opengl3.h>
-#include <backends/imgui_impl_sdl.h>
+#include <backends/imgui_impl_sdl2.h>
 #include <fstream>
 #include <string>
 
@@ -363,7 +363,7 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 	meshdata.batches.resize(1);
 	meshdata.batches[0].material_index = 0;
 	meshdata.batches[0].num_indices = (uint32)meshdata.vert_index_buffer.size();
-	meshdata.batches[0].prim_start_offset = 0;
+	meshdata.batches[0].prim_start_offset_B = 0;
 
 	meshdata.num_materials_referenced = 1;
 
@@ -472,9 +472,9 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 
 	//conPrint("Creating mesh took           " + timer.elapsedStringMSWIthNSigFigs(4));
 
-	mesh_data->indices_vbo_handle = opengl_engine->vert_buf_allocator->allocateIndexData(mesh_data->vert_index_buffer.data(), mesh_data->vert_index_buffer.dataSizeBytes());
+	mesh_data->indices_vbo_handle = opengl_engine->vert_buf_allocator->allocateIndexDataSpace(mesh_data->vert_index_buffer.data(), mesh_data->vert_index_buffer.dataSizeBytes());
 
-	mesh_data->vbo_handle = opengl_engine->vert_buf_allocator->allocate(mesh_data->vertex_spec, mesh_data->vert_data.data(), mesh_data->vert_data.dataSizeBytes());
+	mesh_data->vbo_handle = opengl_engine->vert_buf_allocator->allocateVertexDataSpace(mesh_data->vertex_spec.vertStride(), mesh_data->vert_data.data(), mesh_data->vert_data.dataSizeBytes());
 
 #if DO_INDIVIDUAL_VAO_ALLOC
 	mesh_data->individual_vao = new VAO(mesh_data->vbo_handle.vbo, mesh_data->indices_vbo_handle.index_vbo, mesh_data->vertex_spec);
@@ -906,11 +906,14 @@ int main(int, char**)
 
 		const std::string data_dir = PlatformUtils::getEnvironmentVariable("GLARE_CORE_TRUNK_DIR") + "/opengl";
 		StandardPrintOutput print_output;
-		opengl_engine->initialise(data_dir, texture_server, &print_output);
+		glare::TaskManager main_task_manager(1);
+		glare::TaskManager high_priority_task_manager(1);
+		Reference<glare::Allocator> malloc_mem_allocator = new glare::MallocAllocator();
+		opengl_engine->initialise(data_dir, texture_server, &print_output, &main_task_manager, &high_priority_task_manager, malloc_mem_allocator);
 		if(!opengl_engine->initSucceeded())
 			throw glare::Exception("OpenGL init failed: " + opengl_engine->getInitialisationErrorMsg());
-		opengl_engine->setViewport(primary_W, primary_H);
-		opengl_engine->setMainViewport(primary_W, primary_H);
+		opengl_engine->setViewportDims(primary_W, primary_H);
+		opengl_engine->setMainViewportDims(primary_W, primary_H);
 
 		const std::string base_dir = ".";
 
@@ -1139,8 +1142,8 @@ int main(int, char**)
 			int gl_w, gl_h;
 			SDL_GL_GetDrawableSize(win, &gl_w, &gl_h);
 
-			opengl_engine->setViewport(gl_w, gl_h);
-			opengl_engine->setMainViewport(gl_w, gl_h);
+			opengl_engine->setViewportDims(gl_w, gl_h);
+			opengl_engine->setMainViewportDims(gl_w, gl_h);
 			opengl_engine->setMaxDrawDistance(1000000.f);
 			opengl_engine->setPerspectiveCameraTransform(world_to_camera_space_matrix, sensor_width, lens_sensor_dist, render_aspect_ratio, /*lens shift up=*/0.f, /*lens shift right=*/0.f);
 			opengl_engine->setCurrentTime((float)timer.elapsed());
@@ -1151,7 +1154,7 @@ int main(int, char**)
 
 			// Draw ImGUI GUI controls
 			ImGui_ImplOpenGL3_NewFrame();
-			ImGui_ImplSDL2_NewFrame(win);
+			ImGui_ImplSDL2_NewFrame();
 			ImGui::NewFrame();
 
 			//ImGui::ShowDemoWindow();
@@ -1416,8 +1419,8 @@ int main(int, char**)
 						int w, h;
 						SDL_GL_GetDrawableSize(win, &w, &h);
 						
-						opengl_engine->setViewport(w, h);
-						opengl_engine->setMainViewport(w, h);
+						opengl_engine->setViewportDims(w, h);
+						opengl_engine->setMainViewportDims(w, h);
 					}
 				}
 				else if(e.type == SDL_KEYDOWN)
