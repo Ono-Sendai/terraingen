@@ -26,15 +26,20 @@ if(WIN32)
 endif()
 
 
-
-SET(GLARE_CORE_TRUNK         $ENV{GLARE_CORE_TRUNK_DIR})
-SET(GLARE_CORE_TRUNK_DIR_ENV $ENV{GLARE_CORE_TRUNK_DIR})
-
 SET(GLARE_CORE_LIBS $ENV{GLARE_CORE_LIBS})
 
+#---------------------------- GLARE_CORE_TRUNK ----------------------------
+set(GLARE_CORE_TRUNK "" CACHE FILEPATH "Glare-core trunk source directory")
+MESSAGE("GLARE_CORE_TRUNK: '${GLARE_CORE_TRUNK}'")
 
+if("${GLARE_CORE_TRUNK}" STREQUAL "")
+	MESSAGE(FATAL_ERROR "Please specify the Glare-core trunk source directory with -DGLARE_CORE_TRUNK=XXX")
+endif()
+
+set(GLARE_CORE_TRUNK_DIR_ENV "${GLARE_CORE_TRUNK}")  # Needs to be set for opengl.cmake
+
+#---------------------------- SDL_BUILD_DIR ----------------------------
 set(SDL_BUILD_DIR "" CACHE FILEPATH "SDL build directory")
-
 MESSAGE("SDL_BUILD_DIR: '${SDL_BUILD_DIR}'")
 
 if("${SDL_BUILD_DIR}" STREQUAL "")
@@ -43,6 +48,7 @@ endif()
 if(NOT EXISTS "${SDL_BUILD_DIR}/include/SDL2/SDL.h")
 	MESSAGE(FATAL_ERROR "Could not find SDL.h from your SDL2 build at '${SDL_BUILD_DIR}/include/SDL2/SDL.h'. Please specify the SDL2 build directory with -DSDL_BUILD_DIR=XXX")
 endif()
+#---------------------------- End SDL_BUILD_DIR ----------------------------
 
 add_definitions(-DBASE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
@@ -50,11 +56,12 @@ set(jpegdir		"${GLARE_CORE_LIBS}/libjpeg-turbo/libjpeg-turbo-3.0.0-vs${TERRAINGE
 
 # These libraries are checked into the glare-core repo to make setting up builds easier.
 set(zlibdir		"${GLARE_CORE_TRUNK}/zlib")
-set(pugixmldir	"${GLARE_CORE_TRUNK}/pugixml/src")
+#set(pugixmldir	"${GLARE_CORE_TRUNK}/pugixml/src")
 set(pngdir		"${GLARE_CORE_TRUNK}/libpng")
 set(zstddir		"${GLARE_CORE_TRUNK}/zstd")
 
-set(imguidir 	"${GLARE_CORE_LIBS}/imgui")
+#set(imguidir 	"${GLARE_CORE_LIBS}/imgui")
+set(imguidir 	"${GLARE_CORE_TRUNK}/ImGui")
 set(libjpegturbodir "${GLARE_CORE_LIBS}/libjpeg-turbo-builds")
 
 if(WIN32)
@@ -182,11 +189,11 @@ ${zlibdir}/zutil.h
 
 
 #============== pugixml ==============
-set(pugixml
-${pugixmldir}/pugixml.cpp
-${pugixmldir}/pugixml.hpp
-${pugixmldir}/pugiconfig.hpp
-)
+#set(pugixml
+#${pugixmldir}/pugixml.cpp
+#${pugixmldir}/pugixml.hpp
+#${pugixmldir}/pugiconfig.hpp
+#)
 
 # MESSAGE(${pugixml})
 
@@ -204,7 +211,7 @@ FILE(GLOB zstandard
 
 SOURCE_GROUP(libpng FILES ${libpng})
 SOURCE_GROUP(zlib FILES ${zlib})
-SOURCE_GROUP(pugixml FILES ${pugixml})
+#SOURCE_GROUP(pugixml FILES ${pugixml})
 SOURCE_GROUP(giflib FILES ${giflib})
 SOURCE_GROUP(little_cms FILES ${little_cms})
 SOURCE_GROUP(zstandard FILES ${zstandard})
@@ -392,7 +399,7 @@ ${openexr_all_files}
 ${libjpg}
 ${libpng}
 ${zlib}
-${pugixml}
+#${pugixml}
 ${giflib}
 ${little_cms}
 ${zstandard}
