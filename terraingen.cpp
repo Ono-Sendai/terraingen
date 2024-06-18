@@ -807,12 +807,14 @@ int main(int, char**)
 
 		OpenCLCommandQueueRef command_queue = new OpenCLCommandQueue(opencl_context, opencl_device->opencl_device_id, profile);
 
+		const std::string base_src_dir(BASE_SOURCE_DIR);
+
 		std::string build_log;
 		OpenCLProgramRef program;
 		try
 		{
 			// Prepend some definitions to the source code
-			std::string src = FileUtils::readEntireFile("erosion_kernel.cl");
+			std::string src = FileUtils::readEntireFile(base_src_dir + "/erosion_kernel.cl");
 			src = 
 				"#define W " + toString(W) + "\n" +
 				"#define H " + toString(H) + "\n" +
@@ -900,14 +902,16 @@ int main(int, char**)
 
 		TextureServer* texture_server = new TextureServer(/*use_canonical_path_keys=*/false);
 
-		const std::string base_src_dir(BASE_SOURCE_DIR);
+		// opengl_data_dir should have 'shaders' and 'gl_data' dirs in it.
+		const std::string opengl_data_dir = PlatformUtils::getCurrentWorkingDirPath();
+		// const std::string opengl_data_dir = FileUtils::getDirectory(PlatformUtils::getFullPathToCurrentExecutable()); 
+		// const std::string opengl_data_dir = PlatformUtils::getEnvironmentVariable("GLARE_CORE_TRUNK_DIR") + "/opengl";
 
-		const std::string data_dir = PlatformUtils::getEnvironmentVariable("GLARE_CORE_TRUNK_DIR") + "/opengl";
 		StandardPrintOutput print_output;
 		glare::TaskManager main_task_manager(1);
 		glare::TaskManager high_priority_task_manager(1);
 		Reference<glare::Allocator> malloc_mem_allocator = new glare::MallocAllocator();
-		opengl_engine->initialise(data_dir, texture_server, &print_output, &main_task_manager, &high_priority_task_manager, malloc_mem_allocator);
+		opengl_engine->initialise(opengl_data_dir, texture_server, &print_output, &main_task_manager, &high_priority_task_manager, malloc_mem_allocator);
 		if(!opengl_engine->initSucceeded())
 			throw glare::Exception("OpenGL init failed: " + opengl_engine->getInitialisationErrorMsg());
 		opengl_engine->setViewportDims(primary_W, primary_H);

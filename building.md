@@ -31,3 +31,13 @@ Now generate the TerrainGen project with CMake, specifying the directory where y
 	mkdir c:/code/terraingen_build
 	cd c:/code/terraingen_build
 	cmake c:/code/terraingen -DGLARE_CORE_TRUNK=c:/code/glare-core -DSDL_BUILD_DIR=C:/programming/SDL/sdl_2.30.0_build
+
+
+## Running
+
+You will need to copy a few files into your build output directory (e.g. c:/code/terraingen_build) to run TerrainGen:
+
+Copy SDL2d.dll from C:\programming\SDL\sdl_2.30.0_build\Debug
+Copy SDL2.dll from C:\programming\SDL\sdl_2.30.0_build\Release
+Copy resources dir from c:/code/terraingen
+Copy gl_data and shaders dirs from C:/code/glare-core/opengl
