@@ -476,9 +476,7 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 
 	mesh_data->vbo_handle = opengl_engine->vert_buf_allocator->allocateVertexDataSpace(mesh_data->vertex_spec.vertStride(), mesh_data->vert_data.data(), mesh_data->vert_data.dataSizeBytes());
 
-#if DO_INDIVIDUAL_VAO_ALLOC
-	mesh_data->individual_vao = new VAO(mesh_data->vbo_handle.vbo, mesh_data->indices_vbo_handle.index_vbo, mesh_data->vertex_spec);
-#endif
+	opengl_engine->vert_buf_allocator->getOrCreateAndAssignVAOForMesh(*mesh_data, mesh_data->vertex_spec);
 
 	return mesh_data;
 }
@@ -814,7 +812,7 @@ int main(int, char**)
 		try
 		{
 			// Prepend some definitions to the source code
-			std::string src = FileUtils::readEntireFile("N:\\terraingen\\trunk\\erosion_kernel.cl");
+			std::string src = FileUtils::readEntireFile("erosion_kernel.cl");
 			src = 
 				"#define W " + toString(W) + "\n" +
 				"#define H " + toString(H) + "\n" +
