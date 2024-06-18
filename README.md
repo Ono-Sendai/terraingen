@@ -10,4 +10,6 @@ Will post an executable to try out soon, let me know if you want to try it!
 
 ![t1](https://github.com/Ono-Sendai/terraingen/assets/30285/8f2d0c12-238d-41c4-8f07-2db01aac859c)
 
+[Compiling/Building TerrainGen instructions](building.md)
+
 [Erosion Maths](erosion_maths.md)
