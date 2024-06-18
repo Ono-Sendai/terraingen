@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.1)
 
 project(terraingen)
 
@@ -33,8 +33,16 @@ SET(GLARE_CORE_TRUNK_DIR_ENV $ENV{GLARE_CORE_TRUNK_DIR})
 SET(GLARE_CORE_LIBS $ENV{GLARE_CORE_LIBS})
 
 
-set(SDL_DIR "${GLARE_CORE_LIBS}/SDL/SDL-release-2.26.2" CACHE FILEPATH "SDL source directory")
-set(SDL_BUILD_DIR "${GLARE_CORE_LIBS}/SDL/sdl_build_vs2022" CACHE FILEPATH "SDL build directory")
+set(SDL_BUILD_DIR "" CACHE FILEPATH "SDL build directory")
+
+MESSAGE("SDL_BUILD_DIR: '${SDL_BUILD_DIR}'")
+
+if("${SDL_BUILD_DIR}" STREQUAL "")
+	MESSAGE(FATAL_ERROR "Please specify the SDL2 build directory with -DSDL_BUILD_DIR=XXX")
+endif()
+if(NOT EXISTS "${SDL_BUILD_DIR}/include/SDL2/SDL.h")
+	MESSAGE(FATAL_ERROR "Could not find SDL.h from your SDL2 build at '${SDL_BUILD_DIR}/include/SDL2/SDL.h'. Please specify the SDL2 build directory with -DSDL_BUILD_DIR=XXX")
+endif()
 
 add_definitions(-DBASE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
@@ -54,7 +62,12 @@ if(WIN32)
 endif()
 
 include_directories("./")
-include_directories(${SDL_DIR}/include)
+include_directories(${SDL_BUILD_DIR}/include/SDL2)
+if(WIN32)
+	include_directories(${SDL_BUILD_DIR}/include-config-release/SDL2) # For SDL_config.h.  NOTE: SDL_config.h seems to be the same for both Debug and Release configs, at least on Windows.
+else()
+	include_directories(${SDL_BUILD_DIR}/include-config-/SDL2)
+endif()
 include_directories(${GLARE_CORE_TRUNK})
 include_directories(${GLARE_CORE_TRUNK}/utils)
 include_directories(${GLARE_CORE_TRUNK}/opengl)
@@ -119,8 +132,8 @@ ${imguidir}/imgui_tables.cpp
 ${imguidir}/imstb_rectpack.h
 ${imguidir}/imstb_textedit.h
 ${imguidir}/imstb_truetype.h
-${imguidir}/backends/imgui_impl_sdl.cpp
-${imguidir}/backends/imgui_impl_sdl.h
+${imguidir}/backends/imgui_impl_sdl2.cpp
+${imguidir}/backends/imgui_impl_sdl2.h
 ${imguidir}/backends/imgui_impl_opengl3.cpp
 ${imguidir}/backends/imgui_impl_opengl3.h
 )
@@ -368,7 +381,7 @@ SOURCE_GROUP(opencl FILES ${opencl})
 add_executable(terraingen
 terraingen.cpp
 erosion_kernel.cl
-notes.txt
+#notes.txt
 ${indigo}
 ${graphics}
 ${opengl}
