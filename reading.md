@@ -36,6 +36,7 @@ https://en.wikipedia.org/wiki/Sediment_transport
 
 ## Other terrain generation / erosion simulation implementations
 
+There are a bunch of commerical software packages such as World Machine, Gaia and World Creator.
 
 ### SoilMachine
 
