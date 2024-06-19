@@ -1,6 +1,8 @@
 
 For the origin of the pipe stuff, see 'Fast Hydraulic Erosion Simulation and Visualization on GPU'.
 
+See also [Reading / Literature](reading.md)
+
 ## Acceleration from water depth differences
 
 Pressure in cell at depth $h$ is 

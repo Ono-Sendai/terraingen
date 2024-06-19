@@ -13,3 +13,5 @@ Will post an executable to try out soon, let me know if you want to try it!
 [Compiling/Building TerrainGen instructions](building.md)
 
 [Erosion Maths](erosion_maths.md)
+
+[Reading / Literature](reading.md)
