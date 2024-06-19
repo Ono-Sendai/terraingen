@@ -1,11 +1,10 @@
 
-# Reading
+# Reading and Related Work
 
 ### Fast Hydraulic Erosion Simulation and Visualization on GPU
 by Xing Mei, Philippe Decaudin, Bao-Gang Hu
-2011
+2007
 https://inria.hal.science/inria-00402079/document
-
 
 Introduces 'virtual pipe' method.
 
@@ -24,10 +23,11 @@ This is essential for realistic terrain features.
 
 
 ### Interactive Terrain Modeling Using Hydraulic Erosion
-2008
 Ondrej Štava, Bedrich Beneš, Matthew Brisbin, Jaroslav Krivánek
+2008
+https://cgg.mff.cuni.cz/~jaroslav/papers/2008-sca-erosim/2008-sca-erosiom-fin.pdf
 
-Introduces a technique for multiple layers of soil 
+Introduces a technique for multiple layers of soil.
 
 ### Wikipedia
 
@@ -56,6 +56,15 @@ https://github.com/LanLou123/Webgl-Erosion/tree/master
 Nice looking and interactive WebGL code.
 
 
-### https://reef3d.wordpress.com/sflow/
+### REEF3D::SFLOW
+
+https://reef3d.wordpress.com/sflow/
 
 Looks like actually rigorous and accurate academic/industrial code.
+
+
+### Reintegration erosion ShaderToy
+
+By Mykhailo Moroz
+
+https://www.shadertoy.com/view/MXcXR4

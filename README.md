@@ -14,4 +14,4 @@ Will post an executable to try out soon, let me know if you want to try it!
 
 [Erosion Maths](erosion_maths.md)
 
-[Reading / Literature](reading.md)
+[Reading and Related Work](reading.md)
