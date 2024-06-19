@@ -18,3 +18,30 @@ http://www.cescg.org/CESCG-2011/papers/TUBudapest-Jako-Balazs.pdf
 
 Similar to 'Fast Hydraulic Erosion Simulation and Visualization on GPU' but introduces max talus angle and 'thermal erosion': that is, soil is transported downhill if the hill angle is too large.
 This is essential for realistic terrain features.
+
+
+### Wikipedia
+
+https://en.wikipedia.org/wiki/Sediment_transport
+
+
+## Other terrain generation / erosion simulation implementations
+
+
+### SoilMachine
+
+https://github.com/weigert/SoilMachine
+
+Advanced technique with multiple layers of differing soils, but runs on CPU, so may be relatively slow.
+
+### Three Ways of Generating Terrain with Erosion Features
+
+https://github.com/dandrino/terrain-erosion-3-ways
+
+General overview of practical techniques including machine learning.
+
+### Terrain erosion sandbox in WebGl
+
+https://github.com/LanLou123/Webgl-Erosion/tree/master
+
+Nice looking and interactive WebGL code.
