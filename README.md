@@ -2,6 +2,8 @@
 
 Will post an executable to try out soon, let me know if you want to try it!
 
+[![Watch vid on YouTube](https://github.com/user-attachments/assets/c1c95efb-b4c3-43d7-bff1-bcb8c4c55d84)](https://www.youtube.com/watch?v=qBPaR19crXY "Watch vid on YouTube")
+
 ![t2](https://github.com/Ono-Sendai/terraingen/assets/30285/6fd2c8ab-076b-4198-bc92-584d376f690d)
 
 ![t3](https://github.com/Ono-Sendai/terraingen/assets/30285/c774ee56-17a9-4425-a161-1eebf1f32c91)
