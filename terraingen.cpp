@@ -949,7 +949,7 @@ int main(int, char**)
 		}
 
 		// NOTE: OpenGLTexture::Format_SRGBA_Uint8 doesn't seem to work on AMD Gpus (rx480 in particular), gives CL_INVALID_IMAGE_FORMAT_DESCRIPTOR.
-		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), /*OpenGLTexture::Format_SRGBA_Uint8*/OpenGLTexture::Format_RGBA_Linear_Uint8, OpenGLTexture::Filtering_Bilinear);
+		OpenGLTextureRef terrain_col_tex = new OpenGLTexture(W, H, opengl_engine.ptr(), ArrayRef<uint8>(NULL, 0), /*OpenGLTexture::Format_SRGBA_Uint8*/OpenGLTextureFormat::Format_RGBA_Linear_Uint8, OpenGLTexture::Filtering_Bilinear);
 
 
 		InitialTerrainShape initial_terrain_shape = InitialTerrainShape::InitialTerrainShape_FBM;

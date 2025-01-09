@@ -14,11 +14,17 @@ add_definitions(-DPNG_NO_SETJMP=1)
 add_definitions(-DBUILD_TESTS=1)
 add_definitions(-DOPENCL_OPENGL_INTEROP=1)
 
+add_definitions(-DNO_LCMS_SUPPORT=1)
+
+add_definitions(-DNO_BASIS_SUPPORT=1)
+add_definitions(-DNO_KTX_SUPPORT=1)
+add_definitions(-DNO_GIF_SUPPORT=1)
+
 
 if(WIN32)
 	if(MSVC_VERSION GREATER_EQUAL 1920 AND MSVC_VERSION LESS 1930)
 		set(TERRAINGEN_VS_VER 2019)
-	elseif(MSVC_VERSION GREATER_EQUAL 1930 AND MSVC_VERSION LESS 1940)
+	elseif(MSVC_VERSION GREATER_EQUAL 1930)
 		set(TERRAINGEN_VS_VER 2022)
 	else()
 		message(FATAL_ERROR "Unhandled MSVC version")
@@ -80,8 +86,6 @@ include_directories(${GLARE_CORE_TRUNK}/utils)
 include_directories(${GLARE_CORE_TRUNK}/opengl)
 include_directories(${zstddir}/lib)
 include_directories(${zstddir}/lib/common) # for xxhash
-include_directories(${GLARE_CORE_TRUNK}/little_cms/include)
-include_directories(${GLARE_CORE_TRUNK}/giflib/lib)
 include_directories(${GLARE_CORE_TRUNK}/opencl/khronos)
 #include_directories(${GLARE_CORE_TRUNK}/opencl/)
 
@@ -197,8 +201,6 @@ ${zlibdir}/zutil.h
 
 # MESSAGE(${pugixml})
 
-FILE(GLOB giflib "${GLARE_CORE_TRUNK}/giflib/lib/*.c" "${GLARE_CORE_TRUNK}/giflib/lib/*.cpp" "${GLARE_CORE_TRUNK}/giflib/lib/*.h")
-FILE(GLOB little_cms "${GLARE_CORE_TRUNK}/little_cms/src/*.c"  "${GLARE_CORE_TRUNK}/little_cms/include/*.h")
 FILE(GLOB zstandard 
 "${zstddir}/lib/*.h"
 "${zstddir}/lib/common/*.c"
@@ -212,8 +214,6 @@ FILE(GLOB zstandard
 SOURCE_GROUP(libpng FILES ${libpng})
 SOURCE_GROUP(zlib FILES ${zlib})
 #SOURCE_GROUP(pugixml FILES ${pugixml})
-SOURCE_GROUP(giflib FILES ${giflib})
-SOURCE_GROUP(little_cms FILES ${little_cms})
 SOURCE_GROUP(zstandard FILES ${zstandard})
 
 
@@ -248,20 +248,10 @@ ${GLARE_CORE_TRUNK}/graphics/jpegdecoder.cpp
 ${GLARE_CORE_TRUNK}/graphics/jpegdecoder.h
 ${GLARE_CORE_TRUNK}/graphics/PNGDecoder.cpp
 ${GLARE_CORE_TRUNK}/graphics/PNGDecoder.h
-${GLARE_CORE_TRUNK}/graphics/tgadecoder.cpp
-${GLARE_CORE_TRUNK}/graphics/tgadecoder.h
-${GLARE_CORE_TRUNK}/graphics/bmpdecoder.cpp
-${GLARE_CORE_TRUNK}/graphics/bmpdecoder.h
 ${GLARE_CORE_TRUNK}/graphics/EXRDecoder.cpp
 ${GLARE_CORE_TRUNK}/graphics/EXRDecoder.h
-${GLARE_CORE_TRUNK}/graphics/FloatDecoder.cpp
-${GLARE_CORE_TRUNK}/graphics/FloatDecoder.h
-${GLARE_CORE_TRUNK}/graphics/GifDecoder.cpp
-${GLARE_CORE_TRUNK}/graphics/GifDecoder.h
 ${GLARE_CORE_TRUNK}/graphics/DXTCompression.cpp
 ${GLARE_CORE_TRUNK}/graphics/DXTCompression.h
-${GLARE_CORE_TRUNK}/graphics/KTXDecoder.cpp
-${GLARE_CORE_TRUNK}/graphics/KTXDecoder.h
 ${GLARE_CORE_TRUNK}/graphics/CompressedImage.cpp
 ${GLARE_CORE_TRUNK}/graphics/CompressedImage.h
 ${GLARE_CORE_TRUNK}/graphics/PerlinNoise.cpp
@@ -282,6 +272,8 @@ ${GLARE_CORE_TRUNK}/graphics/BoxFilterFunction.cpp
 ${GLARE_CORE_TRUNK}/graphics/BoxFilterFunction.h
 ${GLARE_CORE_TRUNK}/graphics/FilterFunction.cpp
 ${GLARE_CORE_TRUNK}/graphics/FilterFunction.h
+${GLARE_CORE_TRUNK}/graphics/TextureData.cpp
+${GLARE_CORE_TRUNK}/graphics/TextureData.h
 )
 
 include(${GLARE_CORE_TRUNK}/opengl/opengl.cmake)
@@ -359,6 +351,8 @@ ${GLARE_CORE_TRUNK}/utils/KillThreadMessage.cpp
 ${GLARE_CORE_TRUNK}/utils/KillThreadMessage.h
 ${GLARE_CORE_TRUNK}/utils/ThreadMessage.cpp
 ${GLARE_CORE_TRUNK}/utils/ThreadMessage.h
+${GLARE_CORE_TRUNK}/utils/GlareString.cpp
+${GLARE_CORE_TRUNK}/utils/GlareString.h
 
 )
 
@@ -370,6 +364,29 @@ ${GLARE_CORE_TRUNK}/maths/Vec4f.h
 ${GLARE_CORE_TRUNK}/maths/Matrix4f.cpp
 ${GLARE_CORE_TRUNK}/maths/Matrix4f.h
 )
+
+set(MESHOPTIMIZER_DIR "${GLARE_CORE_TRUNK}/meshoptimizer/src")
+
+set(meshoptimizer
+${MESHOPTIMIZER_DIR}/allocator.cpp
+${MESHOPTIMIZER_DIR}/meshoptimizer.h
+${MESHOPTIMIZER_DIR}/allocator.cpp
+${MESHOPTIMIZER_DIR}/clusterizer.cpp
+${MESHOPTIMIZER_DIR}/indexcodec.cpp
+${MESHOPTIMIZER_DIR}/indexgenerator.cpp
+${MESHOPTIMIZER_DIR}/overdrawanalyzer.cpp
+${MESHOPTIMIZER_DIR}/overdrawoptimizer.cpp
+${MESHOPTIMIZER_DIR}/simplifier.cpp
+${MESHOPTIMIZER_DIR}/spatialorder.cpp
+${MESHOPTIMIZER_DIR}/stripifier.cpp
+${MESHOPTIMIZER_DIR}/vcacheanalyzer.cpp
+${MESHOPTIMIZER_DIR}/vcacheoptimizer.cpp
+${MESHOPTIMIZER_DIR}/vertexcodec.cpp
+${MESHOPTIMIZER_DIR}/vertexfilter.cpp
+${MESHOPTIMIZER_DIR}/vfetchanalyzer.cpp
+${MESHOPTIMIZER_DIR}/vfetchoptimizer.cpp   
+)
+
 
 
 FILE(GLOB double_conversion "${GLARE_CORE_TRUNK}/double-conversion/*.cc" "${GLARE_CORE_TRUNK}/double-conversion/*.h")
@@ -383,6 +400,7 @@ SOURCE_GROUP(maths FILES ${maths})
 SOURCE_GROUP(double-conversion FILES ${double_conversion})
 SOURCE_GROUP(imgui FILES ${imgui})
 SOURCE_GROUP(opencl FILES ${opencl})
+SOURCE_GROUP(meshoptimizer FILES ${meshoptimizer})
 
 
 add_executable(terraingen
@@ -400,11 +418,10 @@ ${libjpg}
 ${libpng}
 ${zlib}
 #${pugixml}
-${giflib}
-${little_cms}
 ${zstandard}
 ${imgui}
 ${opencl}
+${meshoptimizer}
 )
 
 
