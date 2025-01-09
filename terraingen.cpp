@@ -898,6 +898,7 @@ int main(int, char**)
 		settings.compress_textures = true;
 		settings.shadow_mapping = true;
 		settings.depth_fog = true;
+		settings.render_sun_and_clouds = false;
 		Reference<OpenGLEngine> opengl_engine = new OpenGLEngine(settings);
 
 		TextureServer* texture_server = new TextureServer(/*use_canonical_path_keys=*/false);
@@ -1165,23 +1166,23 @@ int main(int, char**)
 			ImGui::Begin("TerrainGen");
 
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation parameters");
-			bool param_changed = false;
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/5.f, "%.5f");
+
+			ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/5.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"min unit water dischage (q_0) ", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle (rad) ", /*val=*/&constants.max_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
-			param_changed = param_changed || ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad) ", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"min unit water dischage (q_0) ", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t) ", /*val=*/&constants.K_t, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/0.5f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Max talus angle (rad) ", /*val=*/&constants.max_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad) ", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
 			
 
 			
@@ -1192,9 +1193,9 @@ int main(int, char**)
 			ImGui::Dummy(ImVec2(100, 40));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Visualisation");
 
-			param_changed = param_changed || ImGui::ColorEdit3("rock colour", &constants.rock_col.r);
-			param_changed = param_changed || ImGui::ColorEdit3("sediment colour", &constants.sediment_col.r);
-			param_changed = param_changed || ImGui::ColorEdit3("vegetaton colour", &constants.vegetation_col.r);
+			ImGui::ColorEdit3("rock colour", &constants.rock_col.r);
+			ImGui::ColorEdit3("sediment colour", &constants.sediment_col.r);
+			ImGui::ColorEdit3("vegetaton colour", &constants.vegetation_col.r);
 
 			/*if(ImGui::BeginCombo("heightfield showing", HeightFieldShow_strings[cur_heightfield_show]))
 			{
@@ -1210,7 +1211,7 @@ int main(int, char**)
 
 				ImGui::EndCombo();
 			}*/
-			param_changed = param_changed || ImGui::Checkbox("Display water", &display_water);
+			ImGui::Checkbox("Display water", &display_water);
 			if(ImGui::Checkbox("Display sea surface", &display_sea))
 			{
 				if(display_sea)
@@ -1244,8 +1245,6 @@ int main(int, char**)
 			if(ImGui::InputFloat(/*label=*/"Sea level (m)", /*val=*/&constants.sea_level, /*step=*/1.f, /*step fast=*/10.f, "%.3f"))
 			{
 				// Sea height changed, move water plane
-				param_changed = true;
-
 				for(size_t i=0; i<sea_water_obs.size(); ++i)
 				{
 					sea_water_obs[i]->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
