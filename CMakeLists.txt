@@ -62,7 +62,7 @@ set(jpegdir		"${GLARE_CORE_LIBS}/libjpeg-turbo/libjpeg-turbo-3.0.0-vs${TERRAINGE
 
 # These libraries are checked into the glare-core repo to make setting up builds easier.
 set(zlibdir		"${GLARE_CORE_TRUNK}/zlib")
-#set(pugixmldir	"${GLARE_CORE_TRUNK}/pugixml/src")
+set(pugixmldir	"${GLARE_CORE_TRUNK}/pugixml/src")
 set(pngdir		"${GLARE_CORE_TRUNK}/libpng")
 set(zstddir		"${GLARE_CORE_TRUNK}/zstd")
 
@@ -94,6 +94,7 @@ include_directories(${libjpegturbodir})  # libjpegturbodir has jconfig.h
 include_directories(${pngdir})
 include_directories(${zlibdir})
 include_directories(${imguidir})
+include_directories(${pugixmldir})
 
 
 
@@ -193,11 +194,11 @@ ${zlibdir}/zutil.h
 
 
 #============== pugixml ==============
-#set(pugixml
-#${pugixmldir}/pugixml.cpp
-#${pugixmldir}/pugixml.hpp
-#${pugixmldir}/pugiconfig.hpp
-#)
+set(pugixml
+${pugixmldir}/pugixml.cpp
+${pugixmldir}/pugixml.hpp
+${pugixmldir}/pugiconfig.hpp
+)
 
 # MESSAGE(${pugixml})
 
@@ -213,7 +214,7 @@ FILE(GLOB zstandard
 
 SOURCE_GROUP(libpng FILES ${libpng})
 SOURCE_GROUP(zlib FILES ${zlib})
-#SOURCE_GROUP(pugixml FILES ${pugixml})
+SOURCE_GROUP(pugixml FILES ${pugixml})
 SOURCE_GROUP(zstandard FILES ${zstandard})
 
 
@@ -353,7 +354,18 @@ ${GLARE_CORE_TRUNK}/utils/ThreadMessage.cpp
 ${GLARE_CORE_TRUNK}/utils/ThreadMessage.h
 ${GLARE_CORE_TRUNK}/utils/GlareString.cpp
 ${GLARE_CORE_TRUNK}/utils/GlareString.h
-
+${GLARE_CORE_TRUNK}/utils/FileDialogs.cpp
+${GLARE_CORE_TRUNK}/utils/FileDialogs.h
+${GLARE_CORE_TRUNK}/utils/XMLWriteUtils.cpp
+${GLARE_CORE_TRUNK}/utils/XMLWriteUtils.h
+${GLARE_CORE_TRUNK}/utils/XMLParseUtils.cpp
+${GLARE_CORE_TRUNK}/utils/XMLParseUtils.h
+${GLARE_CORE_TRUNK}/utils/IndigoXMLDoc.cpp
+${GLARE_CORE_TRUNK}/utils/IndigoXMLDoc.h
+${GLARE_CORE_TRUNK}/utils/IndigoXMLDoc.cpp
+${GLARE_CORE_TRUNK}/utils/IndigoXMLDoc.h
+${GLARE_CORE_TRUNK}/utils/ArgumentParser.cpp
+${GLARE_CORE_TRUNK}/utils/ArgumentParser.h
 )
 
 set(maths
@@ -417,7 +429,7 @@ ${openexr_all_files}
 ${libjpg}
 ${libpng}
 ${zlib}
-#${pugixml}
+${pugixml}
 ${zstandard}
 ${imgui}
 ${opencl}
