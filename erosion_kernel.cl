@@ -76,6 +76,7 @@ typedef struct
 //} WaterVelState;
 
 
+// Needs to match Constants in terraingen.cpp!
 typedef struct 
 {
 	int W; // grid width
@@ -89,7 +90,7 @@ typedef struct
 	float g; // gravity accel magnitude. positive.
 	float l; // virtual pipe length
 	float f; // friction constant
-	float k; // viscous drag coefficient (see https://en.wikipedia.org/wiki/Shallow_water_equations)
+	//float k; // viscous drag coefficient (see https://en.wikipedia.org/wiki/Shallow_water_equations)
 	float nu; // kinematic viscosity
 
 	float K_c;// = 0.01; // 1; // sediment capacity constant
@@ -424,17 +425,15 @@ __kernel void waterAndVelFieldUpdateKernel(
 	// F = -dE/dx = -d(mgh)/dx = -mg dh/dx
 	// F = ma  => a = F/m   =>    a = -mg dh/dx / m = -g dh/dx
 
-	
 	// k is viscous drag coefficient: https://en.wikipedia.org/wiki/Shallow_water_equations
 
-	//const float friction_factor = (1.0f - constants->f * constants->delta_t / d_m_1);
-
-	// TEMP HACK 1.0 grav g
-	float2 accel = -constants->g * grad - constants->k * state_middle->water_vel + constants->nu * state_middle->water_vel_laplacian 
-		- (constants->f / max(0.1f, d_m)) * state_middle->water_vel
-		;// -
-	//	/*u=*/state_middle->water_vel.x * state_middle->duv_dx - 
-	//	/*v=*/state_middle->water_vel.y * state_middle->duv_dy;
+	float2 accel = -constants->g * grad 
+		//- constants->k * state_middle->water_vel
+		+ constants->nu * state_middle->water_vel_laplacian 
+		- constants->f * state_middle->water_vel * length(state_middle->water_vel) / max(0.01f, d_m); // See 'Friction force on a water stream flowing downhill', https://forwardscattering.org/post/63
+		;
+	//	-/*u=*/state_middle->water_vel.x * state_middle->duv_dx
+	//	-/*v=*/state_middle->water_vel.y * state_middle->duv_dy;
 
 
 	//float mov_frac = length(grad) / h_m;
@@ -766,12 +765,7 @@ __kernel void erosionAndDepositionKernel(
 	//const float suspended_sum = suspended; // suspended[0] + suspended[1] + suspended[2];
 	//if(C > cur_suspended_rate) // suspended amount is smaller than transport capacity, dissolve soil into water:
 	
-	if(x == 200 && y == 256)
-	{
-		printf("water_d:  %f   \n", water_d);
-		printf("current_vol:  %f   \n", current_vol);
-		printf("max_vol:  %f   \n", max_vol);
-	}
+
 	
 	if(max_vol > current_vol)
 	{
@@ -973,7 +967,7 @@ __kernel void sedimentTransportationKernel(
 		if(nx >= 0 && nx < constants->W && ny >= 0 && ny < constants->H)
 		{
 			__global const TerrainState* const n_state = &terrain_state[nx + ny * constants->W];
-			float2 vel_px_coords = n_state->water_vel * constants->recip_cell_w;  
+			float2 vel_px_coords = n_state->water_vel * constants->recip_cell_w;
 			float2 new_pos = (float2)(nx, ny) + vel_px_coords * constants->delta_t;
 
 			/*if(x == 100 && y == 100)

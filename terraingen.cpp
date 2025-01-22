@@ -87,7 +87,7 @@ typedef struct
 } ThermalErosionState;
 
 
-
+// Needs to match Constants in erosion_kernel.cl!
 typedef struct 
 {
 	int W; // grid width
@@ -101,7 +101,7 @@ typedef struct
 	float g; // gravity accel magnitude. positive.
 	float l; // virtual pipe length
 	float f; // friction constant
-	float k; // viscous drag coefficient (see https://en.wikipedia.org/wiki/Shallow_water_equations)
+	//float k; // viscous drag coefficient (see https://en.wikipedia.org/wiki/Shallow_water_equations)
 	float nu; // kinematic viscosity
 	
 	float K_c;// = 0.01; // 1; // sediment capacity constant
@@ -945,7 +945,7 @@ void saveParametersToFile(const Constants& constants, const TerrainParams& terra
 	WRITE_FLOAT_PARAM(g);
 	WRITE_FLOAT_PARAM(l);
 	WRITE_FLOAT_PARAM(f);
-	WRITE_FLOAT_PARAM(k);
+	//WRITE_FLOAT_PARAM(k);
 	WRITE_FLOAT_PARAM(nu);
 
 	WRITE_FLOAT_PARAM(K_c);
@@ -1006,7 +1006,7 @@ void loadParametersFromFile(const std::string& path, Constants& constants, Terra
 	PARSE_FLOAT_PARAM(g);
 	PARSE_FLOAT_PARAM(l);
 	PARSE_FLOAT_PARAM(f);
-	PARSE_FLOAT_PARAM(k);
+	//PARSE_FLOAT_PARAM(k);
 	PARSE_FLOAT_PARAM(nu);
 
 	PARSE_FLOAT_PARAM(K_c);
@@ -1261,9 +1261,9 @@ int main(int argc, char** argv)
 		constants.A = 1; // cross-sectional 'pipe' area
 		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
 		constants.l = 1.0; // l = pipe length
-		constants.f = 1.f; // 0.05f; // friction constant
-		constants.k = 0.001f; // viscous drag coefficient
-		constants.nu = 0.001f; // kinematic viscosity
+		constants.f = 0.1f; // 0.05f; // friction constant
+		//constants.k = 0.001f; // viscous drag coefficient
+		constants.nu = 0.0f; // kinematic viscosity
 
 		constants.K_c = 0.5f; // sediment capacity constant
 		constants.K_s = 3; // 0.5f; // dissolving constant.
@@ -1557,37 +1557,37 @@ int main(int argc, char** argv)
 			ImGui::Text("Grid");
 			ImGui::InputInt(/*label=*/"grid x res", /*val=*/&new_W, /*step=*/1, /*step fast=*/32);
 			ImGui::InputInt(/*label=*/"grid Y res", /*val=*/&new_H, /*step=*/1, /*step fast=*/32);
-			ImGui::SliderFloat(/*label=*/"cell width (s)", /*val=*/&new_cell_w, /*min=*/0.0001f, /*max=*/100.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"cell width (s)", /*val=*/&new_cell_w, /*min=*/0.0001f, /*max=*/100.f, "%.3f");
 			bool grid_changed = ImGui::Button("Apply");
 
-			ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.3f");
 
 			ImGui::Text("Water");
-			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/5.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"viscous drag coeff (k)", /*val=*/&constants.k, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"kinematic viscosity (nu)", /*val=*/&constants.nu, /*min=*/0.0f, /*max=*/1000.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/0.2f, "%.3f");
+			//ImGui::SliderFloat(/*label=*/"viscous drag coeff (k)", /*val=*/&constants.k, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"kinematic viscosity (nu)", /*val=*/&constants.nu, /*min=*/0.0f, /*max=*/10.f, "%.3f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 
 			ImGui::Text("Sediment");
-			ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"min unit water dischage (q_0) ", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"min unit water dischage (q_0) ", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 			
 			ImGui::Text("Smoothing");
-			ImGui::SliderFloat(/*label=*/"Smoothing constant (K_smooth)", /*val=*/&constants.K_smooth,            /*min=*/0.0f, /*max=*/10.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"Smoothing laplacian threshold", /*val=*/&constants.laplacian_threshold, /*min=*/0.0f, /*max=*/1.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Smoothing constant (K_smooth)", /*val=*/&constants.K_smooth,            /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"Smoothing laplacian threshold", /*val=*/&constants.laplacian_threshold, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 
 			ImGui::Text("Thermal erosion");
-			ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t)",             /*val=*/&constants.K_t,    /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"Max talus angle (rad)",            /*val=*/&constants.max_talus_angle,           /*min=*/0.0f, /*max=*/1.5f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad)", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t)",             /*val=*/&constants.K_t,    /*min=*/0.0f, /*max=*/100.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/100.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"Max talus angle (rad)",            /*val=*/&constants.max_talus_angle,           /*min=*/0.0f, /*max=*/1.5f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad)", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.3f");
 			
 			//ImGui::Dummy(ImVec2(30, 20));
 			ImGui::Spacing();
@@ -1607,11 +1607,11 @@ int main(int argc, char** argv)
 			}
 
 			ImGui::InputFloat(/*label=*/"grid cell width", /*val=*/&constants.cell_w, /*step=*/0.1f, /*step fast=*/1.f);
-			ImGui::SliderFloat(/*label=*/"height scale", /*val=*/&terrain_params.height_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"fine roughness height scale", /*val=*/&terrain_params.fine_roughness_vert_scale, /*min=*/0.0f, /*max=*/100.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"x scale", /*val=*/&terrain_params.x_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"y scale", /*val=*/&terrain_params.y_scale, /*min=*/0.0f, /*max=*/10.f, "%.5f");
-			ImGui::SliderFloat(/*label=*/"initial water depth", /*val=*/&terrain_params.initial_water_depth, /*min=*/0.0f, /*max=*/10.f, "%.5f");
+			ImGui::SliderFloat(/*label=*/"height scale", /*val=*/&terrain_params.height_scale, /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"fine roughness height scale", /*val=*/&terrain_params.fine_roughness_vert_scale, /*min=*/0.0f, /*max=*/100.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"x scale", /*val=*/&terrain_params.x_scale, /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"y scale", /*val=*/&terrain_params.y_scale, /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"initial water depth", /*val=*/&terrain_params.initial_water_depth, /*min=*/0.0f, /*max=*/10.f, "%.3f");
 
 			ImGui::Spacing();
 
@@ -1836,7 +1836,7 @@ int main(int argc, char** argv)
 			{
 				ImVec2 tex_dims = ImGui::CalcTextSize(notification_info.notification.c_str());
 
-				const int notification_window_w = tex_dims.x + 20;
+				const float notification_window_w = tex_dims.x + 20.f;
 				ImGui::SetNextWindowSize(ImVec2(notification_window_w, tex_dims.y + 10));
 				ImGui::SetNextWindowPos(ImVec2(gl_w/2 - notification_window_w/2, 25));
 				ImGui::Begin("Notification", NULL, ImGuiWindowFlags_NoDecoration);
