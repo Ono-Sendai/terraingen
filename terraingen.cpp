@@ -108,6 +108,8 @@ typedef struct
 	float K_s;// = 0.01; // 0.5; // dissolving constant.
 	float K_d;// = 0.01; // 1; // deposition constant
 	float K_dmax;// = 0.1f; // Maximum erosion depth: water depth at which erosion stops.
+	float K_coll; // K_coll = 0: collision cos(angle) not used, K_coll = 1: erosion rate proportional to collision cos(angle)
+	float K_cos_angle_threshold; // K_coll = 0: collision cos(angle) not used, K_coll = 1: erosion rate proportional to collision cos(angle)
 	float q_0; // Minimum unit water discharge for sediment carrying.
 	float K_e; // Evaporation constant
 
@@ -126,7 +128,15 @@ typedef struct
 	int draw_water;
 	Colour3f rock_col;
 	Colour3f sediment_col;
+	float sediment_col_step;
+	float sediment_col_weight;
 	Colour3f vegetation_col;
+	Colour3f water_depth_col;
+	float water_depth_col_step;
+	float water_depth_col_weight;
+	Colour3f water_speed_col;
+	float water_speed_col_step;
+	float water_speed_col_weight;
 
 	int debug_draw_channel; // From TextureShow enum
 	float debug_display_max_val;
@@ -954,6 +964,8 @@ void saveParametersToFile(const Constants& constants, const TerrainParams& terra
 	WRITE_FLOAT_PARAM(K_dmax);
 	WRITE_FLOAT_PARAM(q_0);
 	WRITE_FLOAT_PARAM(K_e);
+	WRITE_FLOAT_PARAM(K_coll);
+	WRITE_FLOAT_PARAM(K_cos_angle_threshold);
 
 	WRITE_FLOAT_PARAM(K_smooth);
 	WRITE_FLOAT_PARAM(laplacian_threshold);
@@ -967,7 +979,15 @@ void saveParametersToFile(const Constants& constants, const TerrainParams& terra
 	XMLWriteUtils::writeInt32ToXML(xml, "draw_water", constants.draw_water, tab_depth);
 	XMLWriteUtils::writeColour3fToXML(xml, "rock_col", constants.rock_col, tab_depth);
 	XMLWriteUtils::writeColour3fToXML(xml, "sediment_col", constants.sediment_col, tab_depth);
+	WRITE_FLOAT_PARAM(sediment_col_step);
+	WRITE_FLOAT_PARAM(sediment_col_weight);
 	XMLWriteUtils::writeColour3fToXML(xml, "vegetation_col", constants.vegetation_col, tab_depth);
+	XMLWriteUtils::writeColour3fToXML(xml, "water_depth_col", constants.water_depth_col, tab_depth);
+	WRITE_FLOAT_PARAM(water_depth_col_step);
+	WRITE_FLOAT_PARAM(water_depth_col_weight);
+	XMLWriteUtils::writeColour3fToXML(xml, "water_speed_col", constants.water_speed_col, tab_depth);
+	WRITE_FLOAT_PARAM(water_speed_col_step);
+	WRITE_FLOAT_PARAM(water_speed_col_weight);
 
 	// Write terrain params
 	xml += "\t<!-- terrain -->\n";
@@ -1015,6 +1035,8 @@ void loadParametersFromFile(const std::string& path, Constants& constants, Terra
 	PARSE_FLOAT_PARAM(K_dmax);
 	PARSE_FLOAT_PARAM(q_0);
 	PARSE_FLOAT_PARAM(K_e);
+	PARSE_FLOAT_PARAM(K_coll);
+	PARSE_FLOAT_PARAM(K_cos_angle_threshold);
 
 	PARSE_FLOAT_PARAM(K_smooth);
 	PARSE_FLOAT_PARAM(laplacian_threshold);
@@ -1029,7 +1051,16 @@ void loadParametersFromFile(const std::string& path, Constants& constants, Terra
 	constants.rock_col = XMLParseUtils::parseColour3fWithDefault(sim_params_node, "rock_col", constants.rock_col);
 	constants.rock_col = XMLParseUtils::parseColour3fWithDefault(sim_params_node, "rock_col", constants.rock_col);
 	constants.sediment_col = XMLParseUtils::parseColour3fWithDefault(sim_params_node, "sediment_col", constants.sediment_col);
+	PARSE_FLOAT_PARAM(sediment_col_step);
+	PARSE_FLOAT_PARAM(sediment_col_weight);
 	constants.vegetation_col = XMLParseUtils::parseColour3fWithDefault(sim_params_node, "vegetation_col", constants.vegetation_col);
+	constants.water_depth_col = XMLParseUtils::parseColour3fWithDefault(sim_params_node, "water_depth_col", constants.water_depth_col);
+	PARSE_FLOAT_PARAM(water_depth_col_step);
+	PARSE_FLOAT_PARAM(water_depth_col_weight);
+	constants.water_speed_col = XMLParseUtils::parseColour3fWithDefault(sim_params_node, "water_speed_col", constants.water_speed_col);
+	PARSE_FLOAT_PARAM(water_speed_col_step);
+	PARSE_FLOAT_PARAM(water_speed_col_weight);
+
 
 	// Read terrain params
 	const std::string terrain_shape = XMLParseUtils::parseStringWithDefault(sim_params_node, "terrain_shape", InitialTerrainShape_storage_strings[0]);
@@ -1271,6 +1302,8 @@ int main(int argc, char** argv)
 		constants.K_dmax = 1.f;
 		constants.q_0 = 0.2f;
 		constants.K_e = 0.001f; // 0.005f; // Evaporation constant
+		constants.K_coll = 1.f; // Collision weight
+		constants.K_cos_angle_threshold = 0.05f; // Collision weight
 		constants.K_smooth = 0.f; // Smoothing constant
 		constants.laplacian_threshold = 0.f;
 		constants.K_t = 0.f; // TEMP 0.03f; // Thermal erosion constant
@@ -1286,7 +1319,15 @@ int main(int argc, char** argv)
 		constants.draw_water = 1;
 		constants.rock_col       = toLinearSRGB(Colour3f(63 / 255.f, 56 / 255.f, 51 / 255.f));
 		constants.sediment_col   = toLinearSRGB(Colour3f(105 / 255.f, 97 / 255.f, 88 / 255.f));
+		constants.sediment_col_step = 0.3f;
+		constants.sediment_col_weight = 0.5f;
 		constants.vegetation_col = toLinearSRGB(Colour3f(27 / 255.f, 58 / 255.f, 37 / 255.f));
+		constants.water_depth_col = toLinearSRGB(Colour3f(90 / 255.f, 121 / 255.f, 128 / 255.f));
+		constants.water_depth_col_step = 0.5f;
+		constants.water_depth_col_weight = 0.f;
+		constants.water_speed_col = toLinearSRGB(Colour3f(200 / 255.f, 200 / 255.f, 200 / 255.f));
+		constants.water_speed_col_step = 0.5f;
+		constants.water_speed_col_weight = 0.f;
 		constants.water_z_bias = -0.1f;
 
 		constants.debug_draw_channel = 0;
@@ -1546,6 +1587,7 @@ int main(int argc, char** argv)
 
 			
 			const float spacing_vert_pixels = 15;
+			const float subsection_spacing_vert_pixels = 5;
 
 			ImGui::SetNextWindowSize(ImVec2(600, 1200));
 			ImGui::Begin("TerrainGen");
@@ -1562,6 +1604,7 @@ int main(int argc, char** argv)
 
 			ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.3f");
 
+			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Water");
 			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.3f");
@@ -1572,25 +1615,29 @@ int main(int argc, char** argv)
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 
+			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Sediment");
 			ImGui::SliderFloat(/*label=*/"sediment capacity constant (K_c) ", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"dissolving constant (K_s) ", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"deposition constant (K_d) ", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"erosion depth (K_dmax) ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"collision weight", /*val=*/&constants.K_coll, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"collision angle threshold", /*val=*/&constants.K_cos_angle_threshold, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"min unit water dischage (q_0) ", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 			
+			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Smoothing");
 			ImGui::SliderFloat(/*label=*/"Smoothing constant (K_smooth)", /*val=*/&constants.K_smooth,            /*min=*/0.0f, /*max=*/10.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"Smoothing laplacian threshold", /*val=*/&constants.laplacian_threshold, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 
+			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Thermal erosion");
 			ImGui::SliderFloat(/*label=*/"Thermal erosion constant (K_t)",             /*val=*/&constants.K_t,    /*min=*/0.0f, /*max=*/100.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"Thermal erosion const, deposited (K_tdep) ", /*val=*/&constants.K_tdep, /*min=*/0.0f, /*max=*/100.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"Max talus angle (rad)",            /*val=*/&constants.max_talus_angle,           /*min=*/0.0f, /*max=*/1.5f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"Max talus angle, deposited (rad)", /*val=*/&constants.max_deposited_talus_angle, /*min=*/0.0f, /*max=*/1.5f, "%.3f");
 			
-			//ImGui::Dummy(ImVec2(30, 20));
-			ImGui::Spacing();
+			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Terrain initialisation");
 			if(ImGui::BeginCombo("heightfield shape", InitialTerrainShape_display_strings[terrain_params.terrain_shape]))
 			{
@@ -1613,8 +1660,29 @@ int main(int argc, char** argv)
 			ImGui::SliderFloat(/*label=*/"y scale", /*val=*/&terrain_params.y_scale, /*min=*/0.0f, /*max=*/10.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"initial water depth", /*val=*/&terrain_params.initial_water_depth, /*min=*/0.0f, /*max=*/10.f, "%.3f");
 
-			ImGui::Spacing();
+			
+			ImGui::EndGroup(); // End Simulation parameters group
 
+			//-------------------------------------- Render Terrain colouring section --------------------------------------
+			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
+			ImGui::Text("Terrain Colouring");
+
+			ImGui::ColorEdit3("rock colour", &constants.rock_col.r);
+			ImGui::ColorEdit3("sediment colour", &constants.sediment_col.r);
+			ImGui::SliderFloat(/*label=*/"sediment colour step", /*val=*/&constants.sediment_col_step, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"sediment colour weight", /*val=*/&constants.sediment_col_weight, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			//ImGui::ColorEdit3("vegetation colour", &constants.vegetation_col.r);
+			ImGui::ColorEdit3("water depth colour", &constants.water_depth_col.r);
+			ImGui::SliderFloat(/*label=*/"water depth colour step", /*val=*/&constants.water_depth_col_step, /*min=*/0.0f, /*max=*/4.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"water depth colour weight", /*val=*/&constants.water_depth_col_weight, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			ImGui::ColorEdit3("water speed colour", &constants.water_speed_col.r);
+			ImGui::SliderFloat(/*label=*/"water speed colour step", /*val=*/&constants.water_speed_col_step, /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"water speed colour weight", /*val=*/&constants.water_speed_col_weight, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+
+
+			ImGui::Dummy(ImVec2(30, 20));
+
+			//-------------------------------------- Render save/load parameters buttons --------------------------------------
 			if(ImGui::Button("save parameters"))
 			{
 				try
@@ -1659,32 +1727,12 @@ int main(int argc, char** argv)
 				}
 			}
 
-			ImGui::EndGroup(); // End Simulation parameters group
+
 
 			//-------------------------------------- Render Visualisation section --------------------------------------
 			ImGui::Dummy(ImVec2(60, spacing_vert_pixels));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Visualisation");
 
-			ImGui::ColorEdit3("rock colour", &constants.rock_col.r);
-			ImGui::ColorEdit3("sediment colour", &constants.sediment_col.r);
-			ImGui::ColorEdit3("vegetation colour", &constants.vegetation_col.r);
-
-			//debug_draw_channel
-			
-			/*if(ImGui::BeginCombo("heightfield showing", HeightFieldShow_strings[cur_heightfield_show]))
-			{
-				for(int i=0; i<staticArrayNumElems(HeightFieldShow_strings); ++i)
-				{
-					const bool selected = cur_heightfield_show == i;
-					if(ImGui::Selectable(HeightFieldShow_strings[i], selected))
-						cur_heightfield_show = (HeightFieldShow)i;
-
-					if(selected)
-						ImGui::SetItemDefaultFocus();
-				}
-
-				ImGui::EndCombo();
-			}*/
 			if(ImGui::Checkbox("Display water", &display_water))
 			{
 				if(use_water_mesh)
@@ -1697,9 +1745,6 @@ int main(int argc, char** argv)
 			}
 			if(display_water)
 				ImGui::SliderFloat(/*label=*/"water height bias", /*val=*/&constants.water_z_bias, /*min=*/-1.f, /*max=*/0.f, "%.5f");
-
-			
-			
 			
 			if(ImGui::Checkbox("Display sea surface", &display_sea))
 			{
@@ -1735,7 +1780,6 @@ int main(int argc, char** argv)
 				ImGui::SliderFloat(/*label=*/"orbit dist", /*val=*/&orbit_dist, /*min=*/0.f, /*max=*/myMax(terrain_w, terrain_h) * 3.f, "%.3f");
 			}
 
-
 			ImGui::Text("Debug visualisation");
 			if(ImGui::BeginCombo("texture showing", TextureShow_strings[constants.debug_draw_channel]))
 			{
@@ -1754,6 +1798,7 @@ int main(int argc, char** argv)
 			ImGui::DragFloat(/*label=*/"Texture display max val", /*val=*/&constants.debug_display_max_val, /*value speed=*/0.1f, /*min val=*/0.f, /*max val=*/10000.f);
 
 
+			//-------------------------------------- Render Simulation control section --------------------------------------
 			ImGui::Dummy(ImVec2(60, spacing_vert_pixels));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation control");
 			
