@@ -787,7 +787,7 @@ void saveStructMemberToEXR(Simulation& sim, const std::string& exr_path, size_t 
 }
 
 
-void saveHeightfieldToDisk(Simulation& sim, OpenCLCommandQueueRef command_queue, NotificationInfo& info)
+void saveHeightfieldToDisk(Simulation& sim, bool exr_use_DWAB, OpenCLCommandQueueRef command_queue, NotificationInfo& info)
 {
 	try
 	{
@@ -816,6 +816,7 @@ void saveHeightfieldToDisk(Simulation& sim, OpenCLCommandQueueRef command_queue,
 					data[x + y * sim.W] = sim.terrain_state.elem(x, sim.H - y - 1).height + sim.terrain_state.elem(x, sim.H - y - 1).deposited_sed_h; // flip upside down (so that y=0 is at the top as EXR and PNG expects)
 
 				EXRDecoder::SaveOptions exr_options;
+				exr_options.compression_method = exr_use_DWAB ? EXRDecoder::CompressionMethod_DWAB : EXRDecoder::CompressionMethod_PIZ;
 				EXRDecoder::saveImageToEXR(data.data(), sim.W, sim.H, /*num channels=*/1, /*save alpha channel=*/false, /*"heightfield_with_deposited_sed.exr"*/path, /*layer name=*/"", exr_options);
 			}
 			else
@@ -1344,6 +1345,7 @@ int main(int argc, char** argv)
 		//HeightFieldShow cur_heightfield_show = HeightFieldShow::HeightFieldShow_TerrainOnly;
 		//TextureShow cur_texture_show = TextureShow::TextureShow_DepositedSediment;
 		
+		bool exr_use_DWAB = true;
 		//float tex_display_max_val = 1;
 		bool display_water = true; // Show flowing water?
 		bool display_sea = false; // Display a flat sea surface around the terrain?
@@ -1850,13 +1852,15 @@ int main(int argc, char** argv)
 			ImGui::Dummy(ImVec2(60, spacing_vert_pixels));
 			if(ImGui::Button("Save heightfield to disk"))
 			{
-				saveHeightfieldToDisk(*sim, command_queue, notification_info);
+				saveHeightfieldToDisk(*sim, exr_use_DWAB, command_queue, notification_info);
 			}
 
 			if(ImGui::Button("Save colour texture to disk"))
 			{
 				saveColourTextureToDisk(*sim, command_queue, terrain_col_tex, notification_info);
 			}
+
+			ImGui::Checkbox("EXR: use DWAB", &exr_use_DWAB);
 
 			//-------------------------------------- Render Info section --------------------------------------
 			ImGui::Dummy(ImVec2(60, spacing_vert_pixels));
