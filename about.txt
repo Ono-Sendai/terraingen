@@ -1,0 +1,3 @@
+TerrainGen is written by Nicholas Chapman
+
+https://github.com/Ono-Sendai/terraingen

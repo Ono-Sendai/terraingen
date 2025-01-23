@@ -1209,7 +1209,7 @@ int main(int argc, char** argv)
 		const int primary_window_W = 1920;
 		const int primary_window_H = 1080;
 
-		SDL_Window* win = SDL_CreateWindow("TerrainGen", 100, 100, primary_window_W, primary_window_H, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+		SDL_Window* win = SDL_CreateWindow("TerrainGen v0.1", 100, 100, primary_window_W, primary_window_H, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 		if(win == nullptr)
 			throw glare::Exception("SDL_CreateWindow Error: " + std::string(SDL_GetError()));
 

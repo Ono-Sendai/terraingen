@@ -84,6 +84,9 @@ FileUtils.cp_r("../library_licences.txt", dist_dir, :verbose => true)
 # Copy LICENCE
 FileUtils.cp_r("../LICENCE", dist_dir, :verbose => true)
 
+# Copy about.txt
+FileUtils.cp_r("../about.txt", dist_dir, :verbose => true)
+
 
 # Make zip of directory
 zip_path = "TerrainGen_v0.1.zip"
