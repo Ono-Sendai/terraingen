@@ -1,6 +1,6 @@
 # TerrainGen
 
-Will post an executable to try out soon, let me know if you want to try it!
+![terraingen](https://github.com/user-attachments/assets/35a1109e-c927-4be1-8249-8990135e40d8)
 
 [![Watch vid on YouTube](https://github.com/user-attachments/assets/c1c95efb-b4c3-43d7-bff1-bcb8c4c55d84)](https://www.youtube.com/watch?v=qBPaR19crXY "Watch vid on YouTube")
 
