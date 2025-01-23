@@ -1,5 +1,10 @@
 # TerrainGen
 
+TerrainGen is an open source terrain generator and erosion simulator.  
+It's GPU powered so runs pretty fast.
+
+Currently I've only made a build for Windows but I would consider making a build for Mac if requested.
+
 ![terraingen](https://github.com/user-attachments/assets/35a1109e-c927-4be1-8249-8990135e40d8)
 
 [![Watch vid on YouTube](https://github.com/user-attachments/assets/c1c95efb-b4c3-43d7-bff1-bcb8c4c55d84)](https://www.youtube.com/watch?v=qBPaR19crXY "Watch vid on YouTube")
