@@ -1287,27 +1287,27 @@ int main(int argc, char** argv)
 		constants.H = 1024;
 		constants.cell_w = 8.f;
 		constants.recip_cell_w = 1.f / constants.cell_w;
-		constants.delta_t = 0.08f; // time step
-		constants.r = 0.0025f; // 0.012f; // rainfall rate
+		constants.delta_t = 0.25f; // time step
+		constants.r = 0.001f; // 0.012f; // rainfall rate
 		constants.A = 1; // cross-sectional 'pipe' area
 		constants.g = 9.81f; // gravity accel.  NOTE: should be negative?
 		constants.l = 1.0; // l = pipe length
-		constants.f = 0.1f; // 0.05f; // friction constant
+		constants.f = 0.05f; // 0.05f; // friction constant
 		//constants.k = 0.001f; // viscous drag coefficient
 		constants.nu = 0.0f; // kinematic viscosity
 
 		constants.K_c = 0.5f; // sediment capacity constant
-		constants.K_s = 3; // 0.5f; // dissolving constant.
+		constants.K_s = 10; // dissolving constant.
 		constants.K_d = 0.5f; // deposition constant
 		constants.K_dmax = 1.f;
 		constants.q_0 = 0.2f;
-		constants.K_e = 0.001f; // 0.005f; // Evaporation constant
+		constants.K_e = 0.005f; // Evaporation constant
 		constants.K_coll = 1.f; // Collision weight
 		constants.K_cos_angle_threshold = 0.05f; // Collision weight
 		constants.K_smooth = 0.f; // Smoothing constant
 		constants.laplacian_threshold = 0.f;
-		constants.K_t = 0.f; // TEMP 0.03f; // Thermal erosion constant
-		constants.K_tdep = 0.f; // TEMP 0.03f; // thermal erosion constant for deposited sediment
+		constants.K_t = 10.f;  // Thermal erosion constant
+		constants.K_tdep = 10.f;  // thermal erosion constant for deposited sediment
 		constants.max_talus_angle = Maths::pi<float>()/4;
 		constants.tan_max_talus_angle = std::tan(constants.max_talus_angle);
 		constants.max_deposited_talus_angle = 0.55f;
@@ -1317,15 +1317,15 @@ int main(int argc, char** argv)
 
 		constants.include_water_height = 1;
 		constants.draw_water = 1;
-		constants.rock_col       = toLinearSRGB(Colour3f(63 / 255.f, 56 / 255.f, 51 / 255.f));
-		constants.sediment_col   = toLinearSRGB(Colour3f(105 / 255.f, 97 / 255.f, 88 / 255.f));
+		constants.rock_col       = Colour3f(100 / 255.f, 100 / 255.f, 100 / 255.f); // These colours are non-linear sRGB colours.
+		constants.sediment_col   = Colour3f(159 / 255.f, 128 / 255.f, 79 / 255.f);
 		constants.sediment_col_step = 0.3f;
-		constants.sediment_col_weight = 0.5f;
-		constants.vegetation_col = toLinearSRGB(Colour3f(27 / 255.f, 58 / 255.f, 37 / 255.f));
-		constants.water_depth_col = toLinearSRGB(Colour3f(90 / 255.f, 121 / 255.f, 128 / 255.f));
+		constants.sediment_col_weight = 0.8f;
+		constants.vegetation_col = Colour3f(27 / 255.f, 58 / 255.f, 37 / 255.f);
+		constants.water_depth_col = Colour3f(90 / 255.f, 121 / 255.f, 128 / 255.f);
 		constants.water_depth_col_step = 0.5f;
-		constants.water_depth_col_weight = 0.f;
-		constants.water_speed_col = toLinearSRGB(Colour3f(200 / 255.f, 200 / 255.f, 200 / 255.f));
+		constants.water_depth_col_weight = 0.4f;
+		constants.water_speed_col = Colour3f(200 / 255.f, 200 / 255.f, 200 / 255.f);
 		constants.water_speed_col_step = 0.5f;
 		constants.water_speed_col_weight = 0.f;
 		constants.water_z_bias = -0.1f;
