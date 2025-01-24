@@ -65,6 +65,7 @@ typedef struct
 	Vec2f new_water_vel;
 
 	Vec2f water_vel_laplacian;
+	Vec2f dterrainh_dxy;
 	//Vec2f duv_dx;
 	//Vec2f duv_dy;
 
@@ -203,10 +204,10 @@ public:
 	Array2D<ThermalErosionState> thermal_erosion_state;
 
 
-	OpenCLKernelRef flowSimulationKernel;
+	OpenCLKernelRef computeWaterVelDerivs;
 	OpenCLKernelRef thermalErosionFluxKernel;
 	OpenCLKernelRef thermalErosionDepositedFluxKernel;
-	OpenCLKernelRef waterAndVelFieldUpdateKernel;
+	OpenCLKernelRef waterVelFieldUpdateKernel;
 	OpenCLKernelRef erosionAndDepositionKernel;
 	OpenCLKernelRef waterAndSedimentTransportationKernel;
 	OpenCLKernelRef thermalErosionMovementKernel;
@@ -215,8 +216,8 @@ public:
 	OpenCLKernelRef setHeightFieldMeshKernel;
 
 	OpenCLBuffer terrain_state_buffer;
-	OpenCLBuffer flow_state_buffer_a;
-	OpenCLBuffer flow_state_buffer_b;
+	//OpenCLBuffer flow_state_buffer_a;
+	//OpenCLBuffer flow_state_buffer_b;
 	OpenCLBuffer thermal_erosion_state_buffer;
 	OpenCLBuffer constants_buffer;
 
@@ -243,15 +244,15 @@ public:
 		use_water_mesh = true;
 
 		terrain_state_buffer.alloc(opencl_context, /*size=*/constants.W * constants.H * sizeof(TerrainState), CL_MEM_READ_WRITE);
-		flow_state_buffer_a.alloc(opencl_context, constants.W * constants.H * sizeof(FlowState), CL_MEM_READ_WRITE);
-		flow_state_buffer_b.alloc(opencl_context, constants.W * constants.H * sizeof(FlowState), CL_MEM_READ_WRITE);
+		//flow_state_buffer_a.alloc(opencl_context, constants.W * constants.H * sizeof(FlowState), CL_MEM_READ_WRITE);
+		//flow_state_buffer_b.alloc(opencl_context, constants.W * constants.H * sizeof(FlowState), CL_MEM_READ_WRITE);
 		thermal_erosion_state_buffer.alloc(opencl_context, constants.W * constants.H * sizeof(ThermalErosionState), CL_MEM_READ_WRITE);
 		constants_buffer.allocFrom(opencl_context, &constants, sizeof(Constants), CL_MEM_READ_ONLY);
 
-		flowSimulationKernel = new OpenCLKernel(program, "flowSimulationKernel", opencl_device->opencl_device_id, profile);
+		computeWaterVelDerivs = new OpenCLKernel(program, "computeWaterVelDerivs", opencl_device->opencl_device_id, profile);
 		thermalErosionFluxKernel = new OpenCLKernel(program, "thermalErosionFluxKernel", opencl_device->opencl_device_id, profile);
 		//thermalErosionDepositedFluxKernel = new OpenCLKernel(program, "thermalErosionDepositedFluxKernel", opencl_device->opencl_device_id, profile);
-		waterAndVelFieldUpdateKernel = new OpenCLKernel(program, "waterAndVelFieldUpdateKernel", opencl_device->opencl_device_id, profile);
+		waterVelFieldUpdateKernel = new OpenCLKernel(program, "waterVelFieldUpdateKernel", opencl_device->opencl_device_id, profile);
 		erosionAndDepositionKernel = new OpenCLKernel(program, "erosionAndDepositionKernel", opencl_device->opencl_device_id, profile);
 		waterAndSedimentTransportationKernel = new OpenCLKernel(program, "waterAndSedimentTransportationKernel", opencl_device->opencl_device_id, profile);
 		thermalErosionMovementKernel = new OpenCLKernel(program, "thermalErosionMovementKernel", opencl_device->opencl_device_id, profile);
@@ -273,30 +274,25 @@ public:
 
 	void doSimIteration(OpenCLCommandQueueRef command_queue)
 	{
-		OpenCLBuffer* cur_flow_state_buffer   = &flow_state_buffer_a;
-		OpenCLBuffer* other_flow_state_buffer = &flow_state_buffer_b;
-
 		const int num_iters = 2; // Should be even so that we end up with cur_flow_state_buffer == flow_state_buffer_a
 		for(int z=0; z<num_iters; ++z)
 		{
-			flowSimulationKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			flowSimulationKernel->setKernelArgBuffer(1, *cur_flow_state_buffer); // source
-			flowSimulationKernel->setKernelArgBuffer(2, *other_flow_state_buffer); // destination
-			flowSimulationKernel->setKernelArgBuffer(3, constants_buffer);
-			flowSimulationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+			// Sets water_vel_laplacian
+			computeWaterVelDerivs->setKernelArgBuffer(0, terrain_state_buffer);
+			computeWaterVelDerivs->setKernelArgBuffer(1, constants_buffer);
+			computeWaterVelDerivs->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
-			mySwap(cur_flow_state_buffer, other_flow_state_buffer); // Swap pointers
-
-			//waterAndVelFieldUpdateKernel->setKernelArgBuffer(0, *cur_flow_state_buffer);
-			waterAndVelFieldUpdateKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			waterAndVelFieldUpdateKernel->setKernelArgBuffer(1, constants_buffer);
-			waterAndVelFieldUpdateKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+			// Update dterrainh_dxy, water_vel
+			waterVelFieldUpdateKernel->setKernelArgBuffer(0, terrain_state_buffer);
+			waterVelFieldUpdateKernel->setKernelArgBuffer(1, constants_buffer);
+			waterVelFieldUpdateKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 			
+			// Updates new_water_vel, new_water_mass, new_suspended_vol
 			waterAndSedimentTransportationKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			waterAndSedimentTransportationKernel->setKernelArgBuffer(1, constants_buffer);
 			waterAndSedimentTransportationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
-			// NEW: updates height, suspended_vol, deposited_sed_h, also assigns new_water_mass -> water_mass etc.
+			// Updates height, suspended_vol, deposited_sed_h, also assigns new_water_mass -> water_mass etc.
 			erosionAndDepositionKernel->setKernelArgBuffer(0, terrain_state_buffer);
 			erosionAndDepositionKernel->setKernelArgBuffer(1, constants_buffer);
 			erosionAndDepositionKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
@@ -304,12 +300,14 @@ public:
 
 			for(int deposited_sed=0; deposited_sed<2; ++deposited_sed)
 			{
+				// Sets height_laplacian, thermal_vel, thermal_move_vol
 				thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
 				thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
 				thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
 				thermalErosionFluxKernel->setKernelArgInt(3, deposited_sed); // erosion of deposited sediment?
 				thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
+				// Sets deposited_sed_h, height
 				thermalErosionMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
 				thermalErosionMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
 				thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
@@ -343,8 +341,6 @@ public:
 			evaporationKernel->setKernelArgBuffer(1, constants_buffer);
 			evaporationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 		}
-
-		assert(cur_flow_state_buffer == &flow_state_buffer_a);
 
 		sim_iteration += num_iters;
 	}

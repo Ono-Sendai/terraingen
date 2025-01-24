@@ -37,6 +37,7 @@ typedef struct
 	float2 new_water_vel;
 
 	float2 water_vel_laplacian;
+	float2 dterrainh_dxy;
 	//float2 duv_dx;
 	//float2 duv_dy;
 
@@ -133,10 +134,8 @@ float rainfallFactorForCoords(int x, int y)
 }
 
 // NEW: sets water_vel_laplacian, water_vel_partial_derivs (duv_dx, duv_dy)
-__kernel void flowSimulationKernel(
+__kernel void computeWaterVelDerivs(
 	__global       TerrainState* restrict const terrain_state, 
-	__global const FlowState* restrict const flow_state, 
-	__global       FlowState* restrict const new_flow_state, 
 	__constant Constants* restrict const constants
 )
 {
@@ -193,10 +192,8 @@ float waterMassForHeight(float water_height, __constant Constants* restrict cons
 
 
 
-// NEW: Updates water_vel, updates water_mass from rainfall
-// Updates water, u, v in terrain_state
-__kernel void waterAndVelFieldUpdateKernel(
-	//__global const FlowState* restrict const flow_state, 
+// Updates dterrainh_dxy, water_vel
+__kernel void waterVelFieldUpdateKernel(
 	__global       TerrainState* restrict const terrain_state, 
 	__constant Constants* restrict const constants
 )
@@ -215,30 +212,38 @@ __kernel void waterAndVelFieldUpdateKernel(
 	__global const TerrainState* const state_bot      = &terrain_state[x         + y_minus_1 * constants->W];
 	__global       TerrainState* const state_middle   = &terrain_state[x         + y         * constants->W];
 
-	// Compute intermediate water height (water depth plus rainfall depth) (eqn. 1)
-	const float d_m = waterHeightForMass(state_middle->water_mass, constants) + constants->delta_t * constants->r * rainfallFactorForCoords(x, y);
-	const float d_L = waterHeightForMass(state_left  ->water_mass, constants) + constants->delta_t * constants->r * rainfallFactorForCoords(x_minus_1, y);
-	const float d_T = waterHeightForMass(state_top   ->water_mass, constants) + constants->delta_t * constants->r * rainfallFactorForCoords(x, y_plus_1);
-	const float d_R = waterHeightForMass(state_right ->water_mass, constants) + constants->delta_t * constants->r * rainfallFactorForCoords(x_plus_1, y);
-	const float d_B = waterHeightForMass(state_bot   ->water_mass, constants) + constants->delta_t * constants->r * rainfallFactorForCoords(x, y_minus_1);
+	const float d_m = waterHeightForMass(state_middle->water_mass, constants);
+	const float d_L = waterHeightForMass(state_left  ->water_mass, constants);
+	const float d_T = waterHeightForMass(state_top   ->water_mass, constants);
+	const float d_R = waterHeightForMass(state_right ->water_mass, constants);
+	const float d_B = waterHeightForMass(state_bot   ->water_mass, constants);
+
+	const float t_m = state_middle->height + state_middle ->deposited_sed_h;
+	const float t_L = state_left  ->height + state_left   ->deposited_sed_h;
+	const float t_R = state_right ->height + state_right  ->deposited_sed_h;
+	const float t_T = state_top   ->height + state_top    ->deposited_sed_h;
+	const float t_B = state_bot   ->height + state_bot    ->deposited_sed_h;
+
+	// Compute partial derivs of terrain height, will be used in erosionAndDepositionKernel.
+	state_middle->dterrainh_dxy = (float2)(
+		(t_R - t_L) * 0.5f * constants->recip_cell_w,  // (t_R - t_L) / (2.0 * constants->cell_w)
+		(t_T - t_B) * 0.5f * constants->recip_cell_w
+	);
 
 	// Compute total water surface height: (terrain height + water depth)
-	const float h_m = state_middle->height + state_middle ->deposited_sed_h + d_m;
-	const float h_L = state_left  ->height + state_left   ->deposited_sed_h + d_L;
-	const float h_R = state_right ->height + state_right  ->deposited_sed_h + d_R;
-	const float h_T = state_top   ->height + state_top    ->deposited_sed_h + d_T;
-	const float h_B = state_bot   ->height + state_bot    ->deposited_sed_h + d_B;
+	const float h_m = t_m + d_m;
+	const float h_L = t_L + d_L;
+	const float h_R = t_R + d_R;
+	const float h_T = t_T + d_T;
+	const float h_B = t_B + d_B;
 
-
-	// NEW:
 	// Compute gradient of resulting water surface height
 	float2 grad = (float2)(
-		(h_R - h_L) / (2.0 * constants->cell_w), 
-		(h_T - h_B) / (2.0 * constants->cell_w)
+		(h_R - h_L) * 0.5f * constants->recip_cell_w, 
+		(h_T - h_B) * 0.5f * constants->recip_cell_w
 	);
 
 	// Compute acceleration of the water in this grid cell, based on some terms in the shallow water equations: https://en.wikipedia.org/wiki/Shallow_water_equations
-
 	float2 accel = -constants->g * grad 
 		+ constants->nu * state_middle->water_vel_laplacian 
 		- constants->f * state_middle->water_vel * length(state_middle->water_vel) / max(0.01f, d_m); // See 'Friction force on a water stream flowing downhill', https://forwardscattering.org/post/63
@@ -248,21 +253,6 @@ __kernel void waterAndVelFieldUpdateKernel(
 
 	// Integrate acceleration, adding to velocity
 	state_middle->water_vel += constants->delta_t * accel;
-
-	// Add rainfall to water_mass
-	const float delta_water_h = constants->delta_t * constants->r * rainfallFactorForCoords(x, y);
-	const float delta_water_mass = waterMassForHeight(delta_water_h, constants);
-
-
-	// Update water_position based on weighted mass of old water and new rainfall water
-	const float new_total_mass = state_middle->water_mass + delta_water_mass;
-	if(new_total_mass > 0.0)
-	{
-		const float orig_mass_frac = state_middle->water_mass / new_total_mass;
-		state_middle->water_mass = new_total_mass;
-		state_middle->water_vel *= orig_mass_frac; // Rainfall has zero lateral velocity, adjust cell water vel accordingly.
-	}
-
 
 	// Limit water speed so that water can't move more than 1 grid cell per time step, otherwise the reintegration procedure will 'lose' the water.
 	float v = length(state_middle->water_vel);
@@ -295,8 +285,7 @@ __kernel void waterAndVelFieldUpdateKernel(
 }
 
 
-// NEW: updates height, suspended_vol, deposited_sed_h
-// Updates 'height', 'suspended', 'sediment' in terrain_state
+// updates height, suspended_vol, deposited_sed_h, also assigns new_water_mass -> water_mass etc.
 __kernel void erosionAndDepositionKernel(
 	__global       TerrainState* restrict const terrain_state, 
 	__constant Constants* restrict const constants
@@ -310,10 +299,6 @@ __kernel void erosionAndDepositionKernel(
 	const int y_minus_1 = max(y-1, 0);
 	const int y_plus_1  = min(y+1, constants->H-1);
 
-	__global const TerrainState* const state_left     = &terrain_state[x_minus_1 + y         * constants->W];
-	__global const TerrainState* const state_right    = &terrain_state[x_plus_1  + y         * constants->W];
-	__global const TerrainState* const state_top      = &terrain_state[x         + y_plus_1  * constants->W];
-	__global const TerrainState* const state_bot      = &terrain_state[x         + y_minus_1 * constants->W];
 	__global       TerrainState* const state_middle   = &terrain_state[x         + y         * constants->W];
 
 
@@ -321,16 +306,8 @@ __kernel void erosionAndDepositionKernel(
 	state_middle->water_vel     = state_middle->new_water_vel;
 	state_middle->suspended_vol = state_middle->new_suspended_vol;
 
-	
-	const float L_h = state_left ->height + state_left ->deposited_sed_h; // state_left ->sediment[0] + state_left ->sediment[1] + state_left ->sediment[2];// + state_left ->water;
-	const float R_h = state_right->height + state_right->deposited_sed_h; // state_right->sediment[0] + state_right->sediment[1] + state_right->sediment[2];// + state_right->water;
-	const float B_h = state_bot  ->height + state_bot  ->deposited_sed_h; // state_bot  ->sediment[0] + state_bot  ->sediment[1] + state_bot  ->sediment[2];// + state_bot  ->water;
-	const float T_h = state_top  ->height + state_top  ->deposited_sed_h; // state_top  ->sediment[0] + state_top  ->sediment[1] + state_top  ->sediment[2];// + state_top  ->water;
-
-	const float dh_dx = (R_h - L_h) * 0.5f * constants->recip_cell_w; // dh/dx = (R_h - L_h) / (2*cell_w) = (R_h - L_h) * 0.5 * (1/cell_w)
-	const float dh_dy = (T_h - B_h) * 0.5f * constants->recip_cell_w;
-
-	const float3 normal = normalize((float3)(-dh_dx, -dh_dy, 1));
+	const float2 dterrainh_dxy = state_middle->dterrainh_dxy;
+	const float3 normal = normalize((float3)(-dterrainh_dxy, 1.f));
 
 	//const float cos_alpha = normal.z;
 	//const float sin_alpha = sqrt(1 - min(1.0f, cos_alpha*cos_alpha));
@@ -342,7 +319,7 @@ __kernel void erosionAndDepositionKernel(
 
 //	const float3 water_flux_vec = (float3)(state_middle->u, state_middle->v, (state_middle->u * dh_dx + state_middle->v * dh_dy) * constants->cell_w);
 
-	const float3 water_vel3 = (float3)(state_middle->water_vel.x, state_middle->water_vel.y, state_middle->water_vel.x * dh_dx + state_middle->water_vel.y * dh_dy);
+	const float3 water_vel3 = (float3)(state_middle->water_vel.x, state_middle->water_vel.y, state_middle->water_vel.x * dterrainh_dxy.x + state_middle->water_vel.y * dterrainh_dxy.y);
 	const float3 unit_water_vel = normalize(water_vel3);
 	const float hit_dot = max(constants->K_cos_angle_threshold, -dot(unit_water_vel, normal));
 			
@@ -959,6 +936,7 @@ __kernel void thermalErosionDepositedFluxKernel(
 5      6      7
 
 */
+// Sets deposited_sed_h, height
 __kernel void thermalErosionMovementKernel(
 	__global const ThermalErosionState* restrict const thermal_erosion_state, 
 	__global       TerrainState* restrict const terrain_state, 
@@ -1181,17 +1159,30 @@ __kernel void evaporationKernel(
 	const int y = get_global_id(1);
 
 	__global       TerrainState* const state_middle   = &terrain_state[x         + y          *constants->W];
-
 	
-
 	const float old_water_depth = waterHeightForMass(state_middle->water_mass, constants);
 
-	const float d_new = old_water_depth * (1 - constants->K_e * constants->delta_t);// evaporation rate depends on water depth.  Makes no physical sense but useful.
+	// Apply evaporation
+	float d_new = old_water_depth * (1 - constants->K_e * constants->delta_t);// evaporation rate depends on water depth.  Makes no physical sense but useful.
 	//const float d_new = max(0.f, old_water_depth - constants->K_e * constants->delta_t); // Make evaporation rate not depend on water depth
 
+	float pre_rainfall_water_mass = waterMassForHeight(d_new, constants);
+
+	// Apply rainfall
+	const float rainfall_delta_h = constants->delta_t * constants->r * rainfallFactorForCoords(x, y);
+	d_new += rainfall_delta_h;
+
 	const float new_water_mass = waterMassForHeight(d_new, constants);
+	const float rainfall_mass = new_water_mass - pre_rainfall_water_mass;
 
 	state_middle->water_mass = new_water_mass;
+
+	// Update water_vel based on weighted mass of old water and new rainfall water
+	if(new_water_mass > 0.0)
+	{
+		const float orig_mass_frac = pre_rainfall_water_mass / new_water_mass;
+		state_middle->water_vel *= orig_mass_frac; // Rainfall has zero lateral velocity, adjust cell water vel accordingly.
+	}
 }
 
 
