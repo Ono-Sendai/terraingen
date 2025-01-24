@@ -49,6 +49,7 @@ Copyright Nicholas Chapman 2025 -
 #include <ArgumentParser.h>
 
 
+// Needs to match TerrainState in erosion_kernel.cl!
 typedef struct
 {
 	float height; // terrain height ('b') (m)
@@ -64,8 +65,8 @@ typedef struct
 	Vec2f new_water_vel;
 
 	Vec2f water_vel_laplacian;
-	Vec2f duv_dx;
-	Vec2f duv_dy;
+	//Vec2f duv_dx;
+	//Vec2f duv_dy;
 
 	Vec2f thermal_vel; // horizontal velocity of thermally eroded solid
 	float thermal_move_vol; // volume of thermally eroded solid
@@ -151,6 +152,7 @@ enum InitialTerrainShape
 	InitialTerrainShape_ConstantSlope,
 	InitialTerrainShape_Hat,
 	InitialTerrainShape_Cone,
+	InitialTerrainShape_Cylinder,
 	InitialTerrainShape_FBM,
 	InitialTerrainShape_Perlin
 };
@@ -160,6 +162,7 @@ const char* InitialTerrainShape_display_strings[] =
 	"constant slope",
 	"hat",
 	"cone",
+	"cylinder",
 	"FBM",
 	"Perlin noise"
 };
@@ -170,6 +173,7 @@ const char* InitialTerrainShape_storage_strings[] =
 	"constant_slope",
 	"hat",
 	"cone",
+	"cylinder",
 	"FBM",
 	"Perlin"
 };
@@ -204,7 +208,7 @@ public:
 	OpenCLKernelRef thermalErosionDepositedFluxKernel;
 	OpenCLKernelRef waterAndVelFieldUpdateKernel;
 	OpenCLKernelRef erosionAndDepositionKernel;
-	OpenCLKernelRef sedimentTransportationKernel;
+	OpenCLKernelRef waterAndSedimentTransportationKernel;
 	OpenCLKernelRef thermalErosionMovementKernel;
 	OpenCLKernelRef thermalErosionDepositedMovementKernel;
 	OpenCLKernelRef evaporationKernel;
@@ -246,12 +250,12 @@ public:
 
 		flowSimulationKernel = new OpenCLKernel(program, "flowSimulationKernel", opencl_device->opencl_device_id, profile);
 		thermalErosionFluxKernel = new OpenCLKernel(program, "thermalErosionFluxKernel", opencl_device->opencl_device_id, profile);
-		thermalErosionDepositedFluxKernel = new OpenCLKernel(program, "thermalErosionDepositedFluxKernel", opencl_device->opencl_device_id, profile);
+		//thermalErosionDepositedFluxKernel = new OpenCLKernel(program, "thermalErosionDepositedFluxKernel", opencl_device->opencl_device_id, profile);
 		waterAndVelFieldUpdateKernel = new OpenCLKernel(program, "waterAndVelFieldUpdateKernel", opencl_device->opencl_device_id, profile);
 		erosionAndDepositionKernel = new OpenCLKernel(program, "erosionAndDepositionKernel", opencl_device->opencl_device_id, profile);
-		sedimentTransportationKernel = new OpenCLKernel(program, "sedimentTransportationKernel", opencl_device->opencl_device_id, profile);
+		waterAndSedimentTransportationKernel = new OpenCLKernel(program, "waterAndSedimentTransportationKernel", opencl_device->opencl_device_id, profile);
 		thermalErosionMovementKernel = new OpenCLKernel(program, "thermalErosionMovementKernel", opencl_device->opencl_device_id, profile);
-		thermalErosionDepositedMovementKernel = new OpenCLKernel(program, "thermalErosionDepositedMovementKernel", opencl_device->opencl_device_id, profile);
+		//thermalErosionDepositedMovementKernel = new OpenCLKernel(program, "thermalErosionDepositedMovementKernel", opencl_device->opencl_device_id, profile);
 		evaporationKernel = new OpenCLKernel(program, "evaporationKernel", opencl_device->opencl_device_id, profile);
 		setHeightFieldMeshKernel = new OpenCLKernel(program, "setHeightFieldMeshKernel", opencl_device->opencl_device_id, profile);
 	}
@@ -288,11 +292,9 @@ public:
 			waterAndVelFieldUpdateKernel->setKernelArgBuffer(1, constants_buffer);
 			waterAndVelFieldUpdateKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 			
-		
-			// NEW: transports both water and sediment
-			sedimentTransportationKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			sedimentTransportationKernel->setKernelArgBuffer(1, constants_buffer);
-			sedimentTransportationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+			waterAndSedimentTransportationKernel->setKernelArgBuffer(0, terrain_state_buffer);
+			waterAndSedimentTransportationKernel->setKernelArgBuffer(1, constants_buffer);
+			waterAndSedimentTransportationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
 			// NEW: updates height, suspended_vol, deposited_sed_h, also assigns new_water_mass -> water_mass etc.
 			erosionAndDepositionKernel->setKernelArgBuffer(0, terrain_state_buffer);
@@ -705,6 +707,25 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, const Te
 			const float r = sqrt(dx*dx + dy*dy);
 			
 			const float cone = myMax(0.0f, 1 - r*4);
+			sim.terrain_state.elem(x, y).height = cone * W / 4.0f * total_vert_scale + 
+				(terrain_params.fine_roughness_vert_scale > 0.f ? PerlinNoise::FBM(nx * fine_rough_xy_scale, ny * fine_rough_xy_scale, 12) * terrain_params.fine_roughness_vert_scale : 0.f);
+		}
+	}
+	else if(terrain_params.terrain_shape == InitialTerrainShape::InitialTerrainShape_Cylinder)
+	{
+		for(int x=0; x<W; ++x)
+		for(int y=0; y<H; ++y)
+		{
+			float nx = (float)x / W;
+			float ny = (float)y / H;
+
+			float dx = nx - 0.5f;
+			float dy = ny - 0.5f;
+			dx /= terrain_params.x_scale;
+			dy /= terrain_params.y_scale;
+			const float r = sqrt(dx*dx + dy*dy);
+			
+			const float cone = r < 1.f ? 1.f : 0.f;
 			sim.terrain_state.elem(x, y).height = cone * W / 4.0f * total_vert_scale + 
 				(terrain_params.fine_roughness_vert_scale > 0.f ? PerlinNoise::FBM(nx * fine_rough_xy_scale, ny * fine_rough_xy_scale, 12) * terrain_params.fine_roughness_vert_scale : 0.f);
 		}
