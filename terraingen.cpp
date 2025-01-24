@@ -1259,13 +1259,26 @@ int main(int argc, char** argv)
 
 		OpenCLCommandQueueRef command_queue = new OpenCLCommandQueue(opencl_context, opencl_device->opencl_device_id, profile);
 
-		const std::string base_src_dir(BASE_SOURCE_DIR);
+
+		const std::string base_dir_path = PlatformUtils::getResourceDirectoryPath();
+
+		std::string kernel_dir = base_dir_path;
+#if BUILD_TESTS
+		try
+		{
+			// For development, allow loading erosion_kernel.cl straight from the repo dir.
+			kernel_dir = PlatformUtils::getEnvironmentVariable("TERRAINGEN_USE_KERNEL_DIR"); // TERRAINGEN_USE_KERNEL_DIR can be set to e.g. c:/code/terraingen
+			conPrint("Using kernel dir from Env var: '" + kernel_dir + "'");
+		}
+		catch(glare::Exception&)
+		{}
+#endif
 
 		std::string build_log;
 		OpenCLProgramRef program;
 		try
 		{
-			const std::string src = FileUtils::readEntireFile(base_src_dir + "/erosion_kernel.cl");
+			const std::string src = FileUtils::readEntireFile(kernel_dir + "/erosion_kernel.cl");
 
 			program = opencl->buildProgram(
 				src,

@@ -71,6 +71,8 @@ copyVCRedist(2022, dist_dir)
 # Copy resources
 FileUtils.cp_r("../resources", dist_dir, :verbose => true)
 
+# Copy erosion_kernel.cl
+FileUtils.cp_r("../erosion_kernel.cl", dist_dir, :verbose => true)
 
 
 # Copy OpenGL shaders and OpenGL data.
@@ -89,7 +91,7 @@ FileUtils.cp_r("../about.txt", dist_dir, :verbose => true)
 
 
 # Make zip of directory
-zip_path = "TerrainGen_v0.1.zip"
+zip_path = "TerrainGen_v0.2.zip"
 
 # Remove existing zip if present
 FileUtils.rm(zip_path, :verbose=>true) if File.exist?(zip_path)
