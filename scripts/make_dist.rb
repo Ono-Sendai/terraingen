@@ -91,7 +91,7 @@ FileUtils.cp_r("../about.txt", dist_dir, :verbose => true)
 
 
 # Make zip of directory
-zip_path = "TerrainGen_v0.2.zip"
+zip_path = "TerrainGen_v0.3.zip"
 
 # Remove existing zip if present
 FileUtils.rm(zip_path, :verbose=>true) if File.exist?(zip_path)
