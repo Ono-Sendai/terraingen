@@ -480,15 +480,6 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 	meshdata.vertex_spec.attributes.push_back(pos_attrib);
 	in_vert_offset_B += sizeof(float) * 3;
 
-	//VertexAttrib normal_attrib;
-	//normal_attrib.enabled = true;
-	//normal_attrib.num_comps = 4; // 3;
-	//normal_attrib.type = GL_INT_2_10_10_10_REV; // GL_FLOAT;
-	//normal_attrib.normalised = true; // false;
-	//normal_attrib.stride = vert_size_B;
-	//normal_attrib.offset = (uint32)in_vert_offset_B;
-	//meshdata.vertex_spec.attributes.push_back(normal_attrib);
-	//in_vert_offset_B += normal_size_B;
 	VertexAttrib normal_attrib;
 	normal_attrib.enabled = true;
 	normal_attrib.num_comps = 3;
@@ -511,8 +502,6 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 	in_vert_offset_B += sizeof(float) * 2;
 
 	assert(in_vert_offset_B == vert_size_B);
-
-	//js::AABBox aabb_os = js::AABBox::emptyAABBox();
 
 	uint8* const vert_data = mesh_data->vert_data.data();
 
@@ -541,9 +530,6 @@ OpenGLMeshRenderDataRef makeTerrainMesh(const Simulation& sim, OpenGLEngine* ope
 		Vec4f(-100000.f,-100000.f,-100000.f,1),
 		Vec4f( 100000.f, 100000.f, 100000.f,1)
 	);
-	//meshdata.aabb_os = aabb_os;
-	//meshdata.aabb_os.min_[2] = -100000.f; // Make AABB bigger so encloses displaced geom updated on GPU
-	//meshdata.aabb_os.max_[2] = 100000.f;
 
 
 	uint32* const indices = (uint32*)mesh_data->vert_index_buffer.data();
@@ -688,7 +674,6 @@ void resetTerrain(Simulation& sim, OpenCLCommandQueueRef command_queue, const Te
 
 			sim.terrain_state.elem(x, y).height = nx * W / 2.0f * total_vert_scale + 
 				(terrain_params.fine_roughness_vert_scale > 0.f ? PerlinNoise::FBM(nx * fine_rough_xy_scale, ny * fine_rough_xy_scale, 12) * terrain_params.fine_roughness_vert_scale : 0.f);
-			
 		}
 	}
 	else if(terrain_params.terrain_shape == InitialTerrainShape::InitialTerrainShape_Hat)
@@ -1194,6 +1179,8 @@ int main(int argc, char** argv)
 
 
 		//=========================== Init SDL and OpenGL ================================
+		// NOTE: OpenGL init needs to go before OpenCL init
+
 		if(SDL_Init(SDL_INIT_VIDEO) != 0)
 			throw glare::Exception("SDL_Init Error: " + std::string(SDL_GetError()));
 
@@ -1206,11 +1193,10 @@ int main(int argc, char** argv)
 		setGLAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 
 
-		// NOTE: OpenGL init needs to go before OpenCL init
 		const int primary_window_W = 1920;
 		const int primary_window_H = 1080;
 
-		SDL_Window* win = SDL_CreateWindow("TerrainGen v0.1", 100, 100, primary_window_W, primary_window_H, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+		SDL_Window* win = SDL_CreateWindow("TerrainGen v0.2", 100, 100, primary_window_W, primary_window_H, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 		if(win == nullptr)
 			throw glare::Exception("SDL_CreateWindow Error: " + std::string(SDL_GetError()));
 
@@ -1226,7 +1212,7 @@ int main(int argc, char** argv)
 		gl3wInit();
 
 		
-		//=========================== Init OpenCL================================
+		//=========================== Init OpenCL ================================
 		OpenCL* opencl = getGlobalOpenCL();
 		if(!opencl)
 			throw glare::Exception("Failed to open OpenCL: " + getGlobalOpenCLLastErrorMsg());
@@ -1296,6 +1282,9 @@ int main(int argc, char** argv)
 			throw e;
 		}
 
+
+		//=========================== Init Simulation ================================
+
 		Constants constants;
 		constants.W = 1024;
 		constants.H = 1024;
@@ -1355,11 +1344,7 @@ int main(int argc, char** argv)
 		terrain_params.y_scale = 3;
 		terrain_params.initial_water_depth = 0;
 
-		//HeightFieldShow cur_heightfield_show = HeightFieldShow::HeightFieldShow_TerrainOnly;
-		//TextureShow cur_texture_show = TextureShow::TextureShow_DepositedSediment;
-		
-		bool exr_use_DWAB = true;
-		//float tex_display_max_val = 1;
+		bool exr_use_DWAB = true; // Use DWAB compression mode when saving EXRs?
 		bool display_water = true; // Show flowing water?
 		bool display_sea = false; // Display a flat sea surface around the terrain?
 		const bool use_water_mesh = true; // Show water as a mesh instead of just as a colour tint on the terrain?
@@ -1377,14 +1362,14 @@ int main(int argc, char** argv)
 		resetTerrain(*sim, command_queue, terrain_params, constants.cell_w, constants.sea_level);
 		
 
-		// Initialise ImGUI
+		//=========================== Initialise ImGUI ================================
 		ImGui::CreateContext();
 
 		ImGui_ImplSDL2_InitForOpenGL(win, gl_context);
 		ImGui_ImplOpenGL3_Init();
 
 
-		// Create OpenGL engine
+		//=========================== Create OpenGL engine ================================
 		OpenGLEngineSettings settings;
 		settings.compress_textures = true;
 		settings.shadow_mapping = true;
@@ -1396,9 +1381,7 @@ int main(int argc, char** argv)
 		TextureServer* texture_server = new TextureServer(/*use_canonical_path_keys=*/false);
 
 		// opengl_data_dir should have 'shaders' and 'gl_data' dirs in it.
-		const std::string opengl_data_dir = PlatformUtils::getCurrentWorkingDirPath();
-		// const std::string opengl_data_dir = FileUtils::getDirectory(PlatformUtils::getFullPathToCurrentExecutable()); 
-		// const std::string opengl_data_dir = PlatformUtils::getEnvironmentVariable("GLARE_CORE_TRUNK_DIR") + "/opengl";
+		const std::string opengl_data_dir = base_dir_path;
 
 		StandardPrintOutput print_output;
 		glare::TaskManager main_task_manager(1);
@@ -1410,36 +1393,19 @@ int main(int argc, char** argv)
 		opengl_engine->setViewportDims(primary_window_W, primary_window_H);
 		opengl_engine->setMainViewportDims(primary_window_W, primary_window_H);
 
-		const std::string base_dir = ".";
-
-
 		const float sun_phi = 1.f;
 		const float sun_theta = Maths::pi<float>() / 4;
 		opengl_engine->setSunDir(normalise(Vec4f(std::cos(sun_phi) * sin(sun_theta), std::sin(sun_phi) * sin(sun_theta), cos(sun_theta), 0)));
 		opengl_engine->setEnvMapTransform(Matrix3f::rotationMatrix(Vec3f(0,0,1), sun_phi));
 
-		/*
-		Set env material
-		*/
+		// Set env material
 		{
 			OpenGLMaterial env_mat;
 			opengl_engine->setEnvMat(env_mat);
 		}
 
-		opengl_engine->setCirrusTexture(opengl_engine->getTexture(base_dir + "/resources/cirrus.exr"));
+		opengl_engine->setCirrusTexture(opengl_engine->getTexture(base_dir_path + "/resources/cirrus.exr"));
 
-
-		//----------------------- Make ground plane -----------------------
-		{
-			GLObjectRef ground_plane = new GLObject();
-			ground_plane->mesh_data = opengl_engine->getUnitQuadMeshData();
-			ground_plane->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(10) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
-			ground_plane->materials.resize(1);
-			ground_plane->materials[0].albedo_texture = opengl_engine->getTexture(base_dir + "/resources/obstacle.png");
-			ground_plane->materials[0].tex_matrix = Matrix2f(10.f, 0, 0, 10.f);
-
-			//opengl_engine->addObject(ground_plane);
-		}
 
 		OpenGLTextureRef terrain_col_tex;
 		GLObjectRef terrain_gl_ob;
@@ -1449,74 +1415,29 @@ int main(int argc, char** argv)
 
 		const float large_water_quad_w = 1000000;
 		
-		// Add water plane
-		std::vector<GLObjectRef> sea_water_obs;
-		if(true)
+		// Create water plane, add to OpenGL engine if needed
+		GLObjectRef sea_water_gl_ob;
 		{
 			OpenGLMaterial water_mat;
 			water_mat.water = true;
 
-			
-			Reference<OpenGLMeshRenderData> quad_meshdata = MeshPrimitiveBuilding::makeQuadMesh(*opengl_engine->vert_buf_allocator, Vec4f(1,0,0,0), Vec4f(0,1,0,0), /*res=*/2);
-			/*for(int y=0; y<16; ++y)
-				for(int x=0; x<16; ++x)
-				{
-					const int offset_x = x - 8;
-					const int offset_y = y - 8;
-					if(!(offset_x == 0 && offset_y == 0))
-					{
-						// Tessellate ground mesh, to avoid texture shimmer due to large quads.
-						GLObjectRef gl_ob = new GLObject();
-						gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, water_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f + offset_x, -0.5f + offset_y, 0);
-						gl_ob->mesh_data = quad_meshdata;
+			sea_water_gl_ob = new GLObject();
+			sea_water_gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
+			sea_water_gl_ob->mesh_data = MeshPrimitiveBuilding::makeQuadMesh(*opengl_engine->vert_buf_allocator, Vec4f(1,0,0,0), Vec4f(0,1,0,0), /*res=*/64); // Tessellate ground mesh, to avoid texture shimmer due to large quads.
 
-						gl_ob->materials.resize(1);
-						gl_ob->materials[0].albedo_linear_rgb = Colour3f(1,0,0);
-						gl_ob->materials[0] = water_mat;
-						opengl_engine->addObject(gl_ob);
-						sea_water_obs.push_back(gl_ob);
-					}
-				}
-				*/
-			{
-				// Tessellate ground mesh, to avoid texture shimmer due to large quads.
-				GLObjectRef gl_ob = new GLObject();
-				gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
-				gl_ob->mesh_data = MeshPrimitiveBuilding::makeQuadMesh(*opengl_engine->vert_buf_allocator, Vec4f(1,0,0,0), Vec4f(0,1,0,0), /*res=*/64);
-
-				gl_ob->materials.resize(1);
-				//gl_ob->materials[0].albedo_linear_rgb = Colour3f(0,0,1);
-				gl_ob->materials[0] = water_mat;
-				if(display_sea)
-					opengl_engine->addObject(gl_ob);
-				sea_water_obs.push_back(gl_ob);
-			}
-
-			/*GLObjectRef ground_plane = new GLObject();
-			ground_plane->mesh_data = opengl_engine->getUnitQuadMeshData();
-			ground_plane->ob_to_world_matrix = Matrix4f::uniformScaleMatrix(10) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
-			ground_plane->materials.resize(1);
-			ground_plane->materials[0].albedo_texture = opengl_engine->getTexture(base_dir + "/resources/obstacle.png");
-			ground_plane->materials[0].tex_matrix = Matrix2f(10.f, 0, 0, 10.f);*/
-
-			//opengl_engine->addObject(ground_plane);
+			sea_water_gl_ob->materials.resize(1);
+			sea_water_gl_ob->materials[0] = water_mat;
+			if(display_sea)
+				opengl_engine->addObject(sea_water_gl_ob);
 		}
-
-		//glFinish();
-
-		//shareOpenGLBuffersWithOpenCLSim(sim, opencl_context, terrain_col_tex, terrain_gl_ob->mesh_data, use_water_mesh ? water_gl_ob->mesh_data : OpenGLMeshRenderDataRef());
-
-		//opengl_engine->addObject(terrain_gl_ob);
-		//opengl_engine->addObject(water_gl_ob);
 
 		Timer timer;
 		Timer time_since_mesh_update;
 
 		TerrainStats stats = computeTerrainStats(*sim, constants);
 
-		float cam_phi = 0.0;
-		float cam_theta = 2.1f; // Maths::pi_2<float>();//1.f;
-		//Vec4f cam_target_pos = Vec4f(W * cell_w / 2.f, H * cell_w / 2.f, 100, 1);
+		float cam_phi = 0.0; // azimuthal angle
+		float cam_theta = 2.1f; // zenith angle
 
 		const float terrain_w = constants.W * constants.cell_w;
 		const float terrain_h = constants.H * constants.cell_w;
@@ -1526,7 +1447,6 @@ int main(int argc, char** argv)
 		const Vec4f cam_forwards = GeometrySampling::dirForSphericalCoords(cam_phi + Maths::pi_2<float>(), cam_theta); // cam_phi = 0   =>  cam forwards is (0,1,0).
 		cam_pos = terrain_centre - cam_forwards * (terrain_h * 1.f);// - Vec4f(cos(cam_phi), sin(cam_phi), 
 		}
-		//float cam_dist = 500;
 		bool orbit_camera = false;
 		float orbit_angular_vel = 0.1f;
 		float orbit_dist = terrain_w;
@@ -1550,8 +1470,6 @@ int main(int argc, char** argv)
 		bool quit = false;
 		while(!quit)
 		{
-			//const double cur_time = timer.elapsed();
-
 			if(orbit_camera)
 			{
 				cam_phi = (float)(timer.elapsed() * orbit_angular_vel);
@@ -1559,28 +1477,20 @@ int main(int argc, char** argv)
 				const Vec4f cam_forwards = GeometrySampling::dirForSphericalCoords(cam_phi + Maths::pi_2<float>(), cam_theta); // cam_phi = 0   =>  cam forwards is (0,1,0).
 				cam_pos = terrain_centre - cam_forwards * orbit_dist;
 			}
-
-				
 			
 
 			if(SDL_GL_MakeCurrent(win, gl_context) != 0)
 				conPrint("SDL_GL_MakeCurrent failed.");
 
-
-			//const Matrix4f T = Matrix4f::translationMatrix(0.f, cam_dist, 0.f);
-			/*const Matrix4f z_rot = Matrix4f::rotationAroundZAxis(cam_phi);
-			const Matrix4f x_rot = Matrix4f::rotationAroundXAxis(-(cam_theta - Maths::pi_2<float>()));*/
 			const Matrix4f z_rot = Matrix4f::rotationAroundZAxis(-cam_phi);
 			const Matrix4f x_rot = Matrix4f::rotationAroundXAxis(cam_theta - Maths::pi_2<float>());
 			const Matrix4f rot = x_rot * z_rot;
-			//const Matrix4f world_to_camera_space_matrix = T * rot * Matrix4f::translationMatrix(-cam_target_pos);
 
 			const Matrix4f world_to_camera_space_matrix = rot * Matrix4f::translationMatrix(-cam_pos);
 
 			const float sensor_width = 0.035f;
-			const float lens_sensor_dist = 0.025f;//0.03f;
+			const float lens_sensor_dist = 0.025f;
 			const float render_aspect_ratio = opengl_engine->getViewPortAspectRatio();
-
 
 			int gl_w, gl_h;
 			SDL_GL_GetDrawableSize(win, &gl_w, &gl_h);
@@ -1599,7 +1509,6 @@ int main(int argc, char** argv)
 			ImGui::NewFrame();
 
 			//ImGui::ShowDemoWindow();
-
 			
 			const float spacing_vert_pixels = 15;
 			const float subsection_spacing_vert_pixels = 5;
@@ -1742,8 +1651,6 @@ int main(int argc, char** argv)
 				}
 			}
 
-
-
 			//-------------------------------------- Render Visualisation section --------------------------------------
 			ImGui::Dummy(ImVec2(60, spacing_vert_pixels));
 			ImGui::TextColored(ImVec4(1,1,0,1), "Visualisation");
@@ -1764,27 +1671,18 @@ int main(int argc, char** argv)
 			if(ImGui::Checkbox("Display sea surface", &display_sea))
 			{
 				if(display_sea)
-				{
-					for(size_t i=0; i<sea_water_obs.size(); ++i)
-						opengl_engine->addObject(sea_water_obs[i]);
-				}
+					opengl_engine->addObject(sea_water_gl_ob);
 				else
-				{
-					for(size_t i=0; i<sea_water_obs.size(); ++i)
-						opengl_engine->removeObject(sea_water_obs[i]);
-				}
+					opengl_engine->removeObject(sea_water_gl_ob);
 			}
 			if(display_sea)
 			{
 				if(ImGui::InputFloat(/*label=*/"Sea level (m)", /*val=*/&constants.sea_level, /*step=*/1.f, /*step fast=*/10.f, "%.3f"))
 				{
 					// Sea height changed, move water plane
-					for(size_t i=0; i<sea_water_obs.size(); ++i)
-					{
-						sea_water_obs[i]->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
-						if(display_sea)
-							opengl_engine->updateObjectTransformData(*sea_water_obs[i]);
-					}
+					sea_water_gl_ob->ob_to_world_matrix = Matrix4f::translationMatrix(0, 0, constants.sea_level) * Matrix4f::uniformScaleMatrix(large_water_quad_w) * Matrix4f::translationMatrix(-0.5f, -0.5f, 0);
+					if(display_sea)
+						opengl_engine->updateObjectTransformData(*sea_water_gl_ob);
 				}
 			}
 
@@ -1946,7 +1844,6 @@ int main(int argc, char** argv)
 				delete sim;
 
 				// Remove old meshes from OpenGL engine
-				//terrain_gl_ob->materials[0].albedo_texture = NULL;
 				terrain_col_tex = NULL;
 
 				opengl_engine->removeObject(terrain_gl_ob);
@@ -2019,11 +1916,8 @@ int main(int argc, char** argv)
 				}
 				else if(e.type == SDL_MOUSEMOTION)
 				{
-					//conPrint("SDL_MOUSEMOTION");
 					if(e.motion.state & SDL_BUTTON_LMASK)
 					{
-						//conPrint("SDL_BUTTON_LMASK down");
-
 						const float move_scale = 0.005f;
 						cam_phi -= e.motion.xrel * move_scale;
 						cam_theta = myClamp<float>(cam_theta + (float)e.motion.yrel * move_scale, 0.01f, Maths::pi<float>() - 0.01f);
@@ -2031,15 +1925,12 @@ int main(int argc, char** argv)
 
 					if((e.motion.state & SDL_BUTTON_MMASK) || (e.motion.state & SDL_BUTTON_RMASK))
 					{
-						//conPrint("SDL_BUTTON_MMASK or SDL_BUTTON_RMASK down");
-
 						//const float move_scale = 1.f;
 						//cam_target_pos += right * -(float)e.motion.xrel * move_scale + up * (float)e.motion.yrel * move_scale;
 					}
 				}
 				else if(e.type == SDL_MOUSEWHEEL)
 				{
-					//conPrint("SDL_MOUSEWHEEL");
 					//cam_dist = myClamp<float>(cam_dist - cam_dist * e.wheel.y * 0.2f, 0.01f, 10000.f);
 					const float move_speed = 30.f * constants.cell_w;
 					cam_pos += forwards * (float)e.wheel.y * move_speed;
