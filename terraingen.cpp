@@ -274,75 +274,72 @@ public:
 
 	void doSimIteration(OpenCLCommandQueueRef command_queue)
 	{
-		const int num_iters = 2; // Should be even so that we end up with cur_flow_state_buffer == flow_state_buffer_a
-		for(int z=0; z<num_iters; ++z)
-		{
-			// Sets water_vel_laplacian
-			computeWaterVelDerivs->setKernelArgBuffer(0, terrain_state_buffer);
-			computeWaterVelDerivs->setKernelArgBuffer(1, constants_buffer);
-			computeWaterVelDerivs->launchKernel2D(command_queue->getCommandQueue(), W, H);
+		// Sets water_vel_laplacian
+		computeWaterVelDerivs->setKernelArgBuffer(0, terrain_state_buffer);
+		computeWaterVelDerivs->setKernelArgBuffer(1, constants_buffer);
+		computeWaterVelDerivs->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
-			// Update dterrainh_dxy, water_vel
-			waterVelFieldUpdateKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			waterVelFieldUpdateKernel->setKernelArgBuffer(1, constants_buffer);
-			waterVelFieldUpdateKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+		// Update dterrainh_dxy, water_vel
+		waterVelFieldUpdateKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		waterVelFieldUpdateKernel->setKernelArgBuffer(1, constants_buffer);
+		waterVelFieldUpdateKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 			
-			// Updates new_water_vel, new_water_mass, new_suspended_vol
-			waterAndSedimentTransportationKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			waterAndSedimentTransportationKernel->setKernelArgBuffer(1, constants_buffer);
-			waterAndSedimentTransportationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+		// Updates new_water_vel, new_water_mass, new_suspended_vol
+		waterAndSedimentTransportationKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		waterAndSedimentTransportationKernel->setKernelArgBuffer(1, constants_buffer);
+		waterAndSedimentTransportationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
-			// Updates height, suspended_vol, deposited_sed_h, also assigns new_water_mass -> water_mass etc.
-			erosionAndDepositionKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			erosionAndDepositionKernel->setKernelArgBuffer(1, constants_buffer);
-			erosionAndDepositionKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+		// Updates height, suspended_vol, deposited_sed_h, also assigns new_water_mass -> water_mass etc.
+		erosionAndDepositionKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		erosionAndDepositionKernel->setKernelArgBuffer(1, constants_buffer);
+		erosionAndDepositionKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
 
-			for(int deposited_sed=0; deposited_sed<2; ++deposited_sed)
-			{
-				// Sets height_laplacian, thermal_vel, thermal_move_vol
-				thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
-				thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
-				thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
-				thermalErosionFluxKernel->setKernelArgInt(3, deposited_sed); // erosion of deposited sediment?
-				thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+		for(int deposited_sed=0; deposited_sed<2; ++deposited_sed)
+		{
+			// Sets height_laplacian, thermal_vel, thermal_move_vol
+			thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
+			thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
+			thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
+			thermalErosionFluxKernel->setKernelArgInt(3, deposited_sed); // erosion of deposited sediment?
+			thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 
-				// Sets deposited_sed_h, height
-				thermalErosionMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
-				thermalErosionMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
-				thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
-				thermalErosionMovementKernel->setKernelArgInt(3, deposited_sed); // erosion of deposited sediment?
-				thermalErosionMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
-			}
-
-			//thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			//thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
-			//thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
-			//thermalErosionFluxKernel->setKernelArgInt(3, 1); // erosion of deposited sediment?
-			//thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
-
-			//thermalErosionMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
-			//thermalErosionMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
-			//thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
-			//thermalErosionMovementKernel->setKernelArgInt(3, 1); // erosion of deposited sediment?
-			//thermalErosionMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
-
-			//thermalErosionDepositedFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			//thermalErosionDepositedFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
-			//thermalErosionDepositedFluxKernel->setKernelArgBuffer(2, constants_buffer);
-			//thermalErosionDepositedFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
-
-			//thermalErosionDepositedMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
-			//thermalErosionDepositedMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
-			//thermalErosionDepositedMovementKernel->setKernelArgBuffer(2, constants_buffer);
-			//thermalErosionDepositedMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
-
-			evaporationKernel->setKernelArgBuffer(0, terrain_state_buffer);
-			evaporationKernel->setKernelArgBuffer(1, constants_buffer);
-			evaporationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+			// Sets deposited_sed_h, height
+			thermalErosionMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
+			thermalErosionMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
+			thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
+			thermalErosionMovementKernel->setKernelArgInt(3, deposited_sed); // erosion of deposited sediment?
+			thermalErosionMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
 		}
 
-		sim_iteration += num_iters;
+		//thermalErosionFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		//thermalErosionFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
+		//thermalErosionFluxKernel->setKernelArgBuffer(2, constants_buffer);
+		//thermalErosionFluxKernel->setKernelArgInt(3, 1); // erosion of deposited sediment?
+		//thermalErosionFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+		//thermalErosionMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
+		//thermalErosionMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
+		//thermalErosionMovementKernel->setKernelArgBuffer(2, constants_buffer);
+		//thermalErosionMovementKernel->setKernelArgInt(3, 1); // erosion of deposited sediment?
+		//thermalErosionMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+		//thermalErosionDepositedFluxKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		//thermalErosionDepositedFluxKernel->setKernelArgBuffer(1, thermal_erosion_state_buffer); // source
+		//thermalErosionDepositedFluxKernel->setKernelArgBuffer(2, constants_buffer);
+		//thermalErosionDepositedFluxKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+		//thermalErosionDepositedMovementKernel->setKernelArgBuffer(0, thermal_erosion_state_buffer);
+		//thermalErosionDepositedMovementKernel->setKernelArgBuffer(1, terrain_state_buffer);
+		//thermalErosionDepositedMovementKernel->setKernelArgBuffer(2, constants_buffer);
+		//thermalErosionDepositedMovementKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+		// Updates water_mass, water_vel
+		evaporationKernel->setKernelArgBuffer(0, terrain_state_buffer);
+		evaporationKernel->setKernelArgBuffer(1, constants_buffer);
+		evaporationKernel->launchKernel2D(command_queue->getCommandQueue(), W, H);
+
+		sim_iteration++;
 	}
 
 	void updateHeightFieldMeshAndTexture(OpenCLCommandQueueRef command_queue)
@@ -1547,7 +1544,7 @@ int main(int argc, char** argv)
 
 			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Water");
-			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.3f");
+			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.4f");
 			ImGui::SliderFloat(/*label=*/"evaporation constant (K_e) ", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"friction constant (f)", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/0.2f, "%.3f");
 			//ImGui::SliderFloat(/*label=*/"viscous drag coeff (k)", /*val=*/&constants.k, /*min=*/0.0f, /*max=*/1.f, "%.5f");
