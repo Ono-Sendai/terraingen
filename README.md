@@ -1,10 +1,21 @@
 # TerrainGen
 
-Will post an executable to try out soon, let me know if you want to try it!
+TerrainGen is an open source terrain generator and erosion simulator.  
+It's GPU powered so runs pretty fast.
+
+Currently I've only made a build for Windows but I would consider making a build for Mac if requested.
+
+You can download the Windows build here: https://github.com/Ono-Sendai/terraingen/releases/tag/v0.1
+
+![terraingen](https://github.com/user-attachments/assets/35a1109e-c927-4be1-8249-8990135e40d8)
 
 [![Watch vid on YouTube](https://github.com/user-attachments/assets/c1c95efb-b4c3-43d7-bff1-bcb8c4c55d84)](https://www.youtube.com/watch?v=qBPaR19crXY "Watch vid on YouTube")
 
+![Gh5rGZTaUAAKiv4](https://github.com/user-attachments/assets/c7722701-1fd5-4941-bfe9-485eb598271c)
+
 ![t2](https://github.com/Ono-Sendai/terraingen/assets/30285/6fd2c8ab-076b-4198-bc92-584d376f690d)
+
+![Gh5h2g0aYAENYcH](https://github.com/user-attachments/assets/fec869f4-285c-417f-bee8-2e5a7c2b7671)
 
 ![t3](https://github.com/Ono-Sendai/terraingen/assets/30285/c774ee56-17a9-4425-a161-1eebf1f32c91)
 
