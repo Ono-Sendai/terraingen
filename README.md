@@ -5,7 +5,7 @@ It's GPU powered so runs pretty fast.
 
 Currently I've only made a build for Windows but I would consider making a build for Mac if requested.
 
-You can download the Windows build here: https://github.com/Ono-Sendai/terraingen/releases/tag/v0.1
+You can download the Windows build here: https://github.com/Ono-Sendai/terraingen/releases
 
 ![terraingen](https://github.com/user-attachments/assets/35a1109e-c927-4be1-8249-8990135e40d8)
 
