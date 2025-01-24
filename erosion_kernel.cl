@@ -247,7 +247,7 @@ __kernel void waterVelFieldUpdateKernel(
 	float2 accel = -constants->g * grad 
 		+ constants->nu * state_middle->water_vel_laplacian 
 		- constants->f * state_middle->water_vel * length(state_middle->water_vel) / max(0.01f, d_m); // See 'Friction force on a water stream flowing downhill', https://forwardscattering.org/post/63
-		;
+
 	//	-/*u=*/state_middle->water_vel.x * state_middle->duv_dx // NOTE: not using these terms currently, not sure if they are needed.
 	//	-/*v=*/state_middle->water_vel.y * state_middle->duv_dy;
 
@@ -282,6 +282,59 @@ __kernel void waterVelFieldUpdateKernel(
 		if(total_terrain_h < sea_level)
 			d_2 = sea_level - total_terrain_h;
 	}*/
+}
+
+
+// Transports both water and sediment
+// Updates new_water_vel, new_water_mass, new_suspended_vol
+__kernel void waterAndSedimentTransportationKernel(
+	__global       TerrainState* restrict const terrain_state, 
+	__constant Constants* restrict const constants
+	)
+{
+	const int x = get_global_id(0);
+	const int y = get_global_id(1);
+
+	__global       TerrainState* const state_middle   = &terrain_state[x         + y          *constants->W];
+
+	// Loop over neighbouring cells
+	float2 total_water_momentum_in = (float2)(0.f, 0.f); // Aka total water momentum
+	float total_mass_in = 0.f;
+	float total_suspended_vol_in = 0.f;
+	for(int ny = y-1; ny <= y+1; ny++)
+	for(int nx = x-1; nx <= x+1; nx++)
+	{
+		if(nx >= 0 && nx < constants->W && ny >= 0 && ny < constants->H)
+		{
+			__global const TerrainState* const n_state = &terrain_state[nx + ny * constants->W];
+			float2 vel_px_coords = n_state->water_vel * constants->recip_cell_w;
+			float2 new_pos = (float2)(nx, ny) + vel_px_coords * constants->delta_t;
+
+			/*if(x == 100 && y == 100)
+			{
+				printf("nx, ny: %f, %f \n", (float)nx, (float)ny);
+				printf("n_state->water_position: %f, %f \n", n_state->water_position.x, n_state->water_position.y);
+				printf("n_state->water_vel: %f, %f \n", n_state->water_vel.x, n_state->water_vel.y);
+				printf("n_state->water_mass: %f \n", n_state->water_mass);
+				printf("new_pos: %f, %f \n", new_pos.x, new_pos.y);
+			}*/
+
+			const float x_diff = fabs((float)x - new_pos.x);
+			const float y_diff = fabs((float)y - new_pos.y);
+			const float weight = max(0.f, (1 - x_diff)) * max(0.f, (1 - y_diff));
+			const float weighted_mass = n_state->water_mass * weight;
+			total_mass_in            += weighted_mass;
+			total_water_momentum_in  += n_state->water_vel * weighted_mass;
+			total_suspended_vol_in   += n_state->suspended_vol * weight;
+		}
+	}
+
+	if(total_mass_in > 0)
+		total_water_momentum_in /= total_mass_in; // Convert from momentum to velocity
+
+	state_middle->new_water_vel     = total_water_momentum_in;
+	state_middle->new_water_mass    = total_mass_in;
+	state_middle->new_suspended_vol = total_suspended_vol_in;
 }
 
 
@@ -387,6 +440,7 @@ inline float biLerp(float a, float b, float c, float d, float t_x, float t_y)
 }
 
 
+#if 0
 inline float mitchellNetravaliEval(float x)
 {
 	float B = 0.5f;
@@ -412,7 +466,6 @@ inline float mitchellNetravaliEval(float x)
 }
 
 
-#if 0
 inline float mitchellNetravaliCubic(float px, float py, __global       TerrainState* restrict const terrain_state)
 {
 	int ut_minus_1 = clamp((int)px - 1, 0, W);
@@ -505,59 +558,6 @@ inline float mitchellNetravaliCubic(float px, float py, __global       TerrainSt
 	return sum / filter_sum;
 }
 #endif
-
-
-// Transports both water and sediment
-// Updates new_water_vel, new_water_mass, new_suspended_vol
-__kernel void waterAndSedimentTransportationKernel(
-	__global       TerrainState* restrict const terrain_state, 
-	__constant Constants* restrict const constants
-	)
-{
-	const int x = get_global_id(0);
-	const int y = get_global_id(1);
-
-	__global       TerrainState* const state_middle   = &terrain_state[x         + y          *constants->W];
-
-	// Loop over neighbouring cells
-	float2 total_water_momentum_in = (float2)(0.f, 0.f); // Aka total water momentum
-	float total_mass_in = 0.f;
-	float total_suspended_vol_in = 0.f;
-	for(int ny = y-1; ny <= y+1; ny++)
-	for(int nx = x-1; nx <= x+1; nx++)
-	{
-		if(nx >= 0 && nx < constants->W && ny >= 0 && ny < constants->H)
-		{
-			__global const TerrainState* const n_state = &terrain_state[nx + ny * constants->W];
-			float2 vel_px_coords = n_state->water_vel * constants->recip_cell_w;
-			float2 new_pos = (float2)(nx, ny) + vel_px_coords * constants->delta_t;
-
-			/*if(x == 100 && y == 100)
-			{
-				printf("nx, ny: %f, %f \n", (float)nx, (float)ny);
-				printf("n_state->water_position: %f, %f \n", n_state->water_position.x, n_state->water_position.y);
-				printf("n_state->water_vel: %f, %f \n", n_state->water_vel.x, n_state->water_vel.y);
-				printf("n_state->water_mass: %f \n", n_state->water_mass);
-				printf("new_pos: %f, %f \n", new_pos.x, new_pos.y);
-			}*/
-
-			const float x_diff = fabs((float)x - new_pos.x);
-			const float y_diff = fabs((float)y - new_pos.y);
-			const float weight = max(0.f, (1 - x_diff)) * max(0.f, (1 - y_diff));
-			const float weighted_mass = n_state->water_mass * weight;
-			total_mass_in            += weighted_mass;
-			total_water_momentum_in  += n_state->water_vel * weighted_mass;
-			total_suspended_vol_in   += n_state->suspended_vol * weight;
-		}
-	}
-
-	if(total_mass_in > 0)
-		total_water_momentum_in /= total_mass_in; // Convert from momentum to velocity
-
-	state_middle->new_water_vel     = total_water_momentum_in;
-	state_middle->new_water_mass    = total_mass_in;
-	state_middle->new_suspended_vol = total_suspended_vol_in;
-}
 
 
 // Sets height_laplacian, thermal_vel, thermal_move_vol
@@ -1149,7 +1149,7 @@ __kernel void thermalErosionDepositedMovementKernel(
 #endif
 
 
-// evaporation kernel.  Updates 'water' in terrain_state
+// Updates water_mass, water_vel
 __kernel void evaporationKernel(
 	__global       TerrainState* restrict const terrain_state, 
 	__constant Constants* restrict const constants
