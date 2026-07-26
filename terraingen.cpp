@@ -1250,6 +1250,8 @@ int main(int argc, char** argv)
 
 		if(opencl_device.isNull())
 			throw glare::Exception("No OpenCL GPU devices found");
+
+		conPrint("Using OpenCL device " + opencl_device->device_name);
 			
 		OpenCLContextRef opencl_context = new OpenCLContext(opencl_device, /*enable opengl interop=*/true);
 
@@ -1319,7 +1321,7 @@ int main(int argc, char** argv)
 		constants.K_dmax = 1.f;
 		constants.q_0 = 0.2f;
 		constants.K_e = 0.005f; // Evaporation constant
-		constants.K_coll = 1.f; // Collision weight
+		constants.K_coll = 0.5f; // Collision weight
 		constants.K_cos_angle_threshold = 0.05f; // Collision weight
 		constants.K_smooth = 0.f; // Smoothing constant
 		constants.laplacian_threshold = 0.f;
@@ -1353,7 +1355,7 @@ int main(int argc, char** argv)
 		TerrainParams terrain_params;
 		terrain_params.terrain_shape = InitialTerrainShape::InitialTerrainShape_FBM;
 		terrain_params.height_scale = 0.8f;
-		terrain_params.fine_roughness_vert_scale = 0.01f;
+		terrain_params.fine_roughness_vert_scale = 10.f;
 		terrain_params.x_scale = 3;
 		terrain_params.y_scale = 3;
 		terrain_params.initial_water_depth = 0;
@@ -1405,7 +1407,6 @@ int main(int argc, char** argv)
 		if(!opengl_engine->initSucceeded())
 			throw glare::Exception("OpenGL init failed: " + opengl_engine->getInitialisationErrorMsg());
 		opengl_engine->setViewportDims(primary_window_W, primary_window_H);
-		opengl_engine->setMainViewportDims(primary_window_W, primary_window_H);
 
 		const float sun_phi = 1.f;
 		const float sun_theta = Maths::pi<float>() / 4;
@@ -1510,7 +1511,6 @@ int main(int argc, char** argv)
 			SDL_GL_GetDrawableSize(win, &gl_w, &gl_h);
 
 			opengl_engine->setViewportDims(gl_w, gl_h);
-			opengl_engine->setMainViewportDims(gl_w, gl_h);
 			opengl_engine->setMaxDrawDistance(1000000.f);
 			opengl_engine->setPerspectiveCameraTransform(world_to_camera_space_matrix, sensor_width, lens_sensor_dist, render_aspect_ratio, /*lens shift up=*/0.f, /*lens shift right=*/0.f);
 			opengl_engine->setCurrentTime((float)timer.elapsed());
@@ -1530,25 +1530,60 @@ int main(int argc, char** argv)
 			ImGui::SetNextWindowSize(ImVec2(600, 1200));
 			ImGui::Begin("TerrainGen");
 
+
+			auto checkShowToolTip = [](const char* title, const char* descr)
+			{
+				if(ImGui::IsItemHovered())
+				{
+					ImGui::BeginTooltip();
+
+					// Optional: limit width so long text wraps instead of making a huge wide tooltip
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 60.f);
+
+					ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), title);
+					ImGui::Separator();
+					ImGui::TextWrapped(descr);
+
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+			};
+
 			//-------------------------------------- Render Simulation parameters section --------------------------------------
 			ImGui::TextColored(ImVec4(1,1,0,1), "Simulation parameters");
 			ImGui::BeginGroup(); // Begin Simulation parameters group
 
 			ImGui::Text("Grid");
-			ImGui::InputInt(/*label=*/"grid x res", /*val=*/&new_W, /*step=*/1, /*step fast=*/32);
+
+			ImGui::InputInt(/*label=*/"grid X res", /*val=*/&new_W, /*step=*/1, /*step fast=*/32);
+			checkShowToolTip("grid X res", "Number of grid cells in the x direction.\nPress [Apply] to apply changes.");
+
 			ImGui::InputInt(/*label=*/"grid Y res", /*val=*/&new_H, /*step=*/1, /*step fast=*/32);
+			checkShowToolTip("grid Y res", "Number of grid cells in the y direction.\nPress [Apply] to apply changes.");
+
 			ImGui::SliderFloat(/*label=*/"cell width (m)", /*val=*/&new_cell_w, /*min=*/0.0001f, /*max=*/100.f, "%.3f");
+			checkShowToolTip("cell width (m)", "The width of each grid cell in metres.  The width of the complete terrain is grid X res * cell width.\nPress [Apply] to apply changes.");
+
 			bool grid_changed = ImGui::Button("Apply");
 
+
 			ImGui::SliderFloat(/*label=*/"delta_t (s)", /*val=*/&constants.delta_t, /*min=*/0.0f, /*max=*/0.3f, "%.3f");
+			checkShowToolTip("Simulation timestep (delta_t)", "Each simulation step advances time by this amount.\nGenerally a smaller timestep gives a more accurate, but slower simulation.  Units: seconds");
 
 			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Water");
 			ImGui::SliderFloat(/*label=*/"rainfall rate (m/s)", /*val=*/&constants.r, /*min=*/0.0f, /*max=*/0.01f, "%.4f");
+			checkShowToolTip("Rainfall rate", "The rate of rainfall on the terrain.\nRain falls uniformly over the terrain.\nUnits: metres per second");
+
 			ImGui::SliderFloat(/*label=*/"evaporation constant", /*val=*/&constants.K_e, /*min=*/0.0f, /*max=*/0.1f, "%.3f");
+			checkShowToolTip("Evaporation Constant", "How fast water evaporates from the ground.");
+
 			ImGui::SliderFloat(/*label=*/"friction constant", /*val=*/&constants.f, /*min=*/0.0f, /*max=*/0.2f, "%.3f");
+			checkShowToolTip("Friction Constant", "A multiplier for the amount of friction water feels when running downhill.\nA higher friction value means water will run more slowly downhill.");
+
 			//ImGui::SliderFloat(/*label=*/"viscous drag coeff (k)", /*val=*/&constants.k, /*min=*/0.0f, /*max=*/1.f, "%.5f");
 			ImGui::SliderFloat(/*label=*/"kinematic viscosity", /*val=*/&constants.nu, /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			checkShowToolTip("kinematic viscosity", "The 'thickness' of the water.\nUnits: metres squared per second");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"cross-sectional 'pipe' area (m)", /*val=*/&constants.A, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"gravity mag (m/s^2)", /*val=*/&constants.g, /*min=*/0.0f, /*max=*/100.f, "%.5f");
 			//param_changed = param_changed || ImGui::SliderFloat(/*label=*/"virtual pipe length (m)", /*val=*/&constants.l, /*min=*/0.0f, /*max=*/100.f, "%.5f");
@@ -1556,17 +1591,23 @@ int main(int argc, char** argv)
 			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Sediment");
 			ImGui::SliderFloat(/*label=*/"sediment capacity constant", /*val=*/&constants.K_c, /*min=*/0.0f, /*max=*/4.f, "%.3f");
+			checkShowToolTip("sediment capacity constant", "How much sediment suspended in the water that water can carry when moving.");
 			ImGui::SliderFloat(/*label=*/"dissolving constant", /*val=*/&constants.K_s, /*min=*/0.0f, /*max=*/20.f, "%.3f");
+			checkShowToolTip("dissolving constant", "How fast sediment is dissolved from the ground into moving water.");
 			ImGui::SliderFloat(/*label=*/"deposition constant", /*val=*/&constants.K_d, /*min=*/0.0f, /*max=*/4.f, "%.3f");
+			checkShowToolTip("deposition constant", "How fast sediment is deposited from water back onto the ground.");
 			ImGui::SliderFloat(/*label=*/"max erosion water depth ", /*val=*/&constants.K_dmax, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			checkShowToolTip("max erosion water depth", "Deeper water can carry more sediment, up to this depth.");
 			ImGui::SliderFloat(/*label=*/"collision weight", /*val=*/&constants.K_coll, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 			ImGui::SliderFloat(/*label=*/"collision angle threshold", /*val=*/&constants.K_cos_angle_threshold, /*min=*/0.0f, /*max=*/1.f, "%.3f");
-			ImGui::SliderFloat(/*label=*/"min unit water discharge", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			//ImGui::SliderFloat(/*label=*/"min unit water discharge", /*val=*/&constants.q_0, /*min=*/0.0f, /*max=*/1.f, "%.3f");
 			
 			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Smoothing");
 			ImGui::SliderFloat(/*label=*/"Smoothing constant", /*val=*/&constants.K_smooth,            /*min=*/0.0f, /*max=*/10.f, "%.3f");
+			checkShowToolTip("Smoothing constant", "How fast sharp features of the terrain are smoothed.");
 			ImGui::SliderFloat(/*label=*/"Smoothing laplacian threshold", /*val=*/&constants.laplacian_threshold, /*min=*/0.0f, /*max=*/1.f, "%.3f");
+			checkShowToolTip("Smoothing laplacian threshold", "Only terrain features with curvature greater than this threshold are smoothed.");
 
 			ImGui::Dummy(ImVec2(30, subsection_spacing_vert_pixels));
 			ImGui::Text("Thermal erosion");
@@ -1915,7 +1956,6 @@ int main(int argc, char** argv)
 						SDL_GL_GetDrawableSize(win, &w, &h);
 						
 						opengl_engine->setViewportDims(w, h);
-						opengl_engine->setMainViewportDims(w, h);
 					}
 				}
 				else if(e.type == SDL_KEYDOWN)
