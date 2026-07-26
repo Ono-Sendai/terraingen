@@ -244,19 +244,22 @@ __kernel void waterVelFieldUpdateKernel(
 	);
 
 	// Compute acceleration of the water in this grid cell, based on some terms in the shallow water equations: https://en.wikipedia.org/wiki/Shallow_water_equations
-	float2 accel = -constants->g * grad 
-		+ constants->nu * state_middle->water_vel_laplacian 
-		- constants->f * state_middle->water_vel * length(state_middle->water_vel) / max(0.01f, d_m); // See 'Friction force on a water stream flowing downhill', https://forwardscattering.org/post/63
+	// See 'Friction force on a water stream flowing downhill', https://forwardscattering.org/post/63
+//	float2 accel = -constants->g * grad 
+//		+ constants->nu * state_middle->water_vel_laplacian 
+//		- constants->f * state_middle->water_vel * length(state_middle->water_vel) / max(0.01f, d_m); 
+//	// Integrate acceleration, adding to velocity
+//	state_middle->water_vel += constants->delta_t * accel;
 
-	//	-/*u=*/state_middle->water_vel.x * state_middle->duv_dx // NOTE: not using these terms currently, not sure if they are needed.
-	//	-/*v=*/state_middle->water_vel.y * state_middle->duv_dy;
-
-	// Integrate acceleration, adding to velocity
-	state_middle->water_vel += constants->delta_t * accel;
+	// 2. Semi-implicit friction — unconditionally stable, cannot overshoot or flip sign.
+	// Replace the friction term in `accel` with a post-integration divide:
+	state_middle->water_vel += constants->delta_t * (-constants->g * grad + constants->nu * state_middle->water_vel_laplacian);
+	const float drag = constants->f * length(state_middle->water_vel) * constants->delta_t / max(0.01f, d_m);
+	state_middle->water_vel /= (1.f + drag);
 
 	// Limit water speed so that water can't move more than 1 grid cell per time step, otherwise the reintegration procedure will 'lose' the water.
 	float v = length(state_middle->water_vel);
-	float max_v = constants->cell_w;
+	float max_v = 0.5f * constants->cell_w / constants->delta_t;
 	if(v > max_v)
 		state_middle->water_vel *= max_v / v;
 
@@ -392,7 +395,9 @@ __kernel void erosionAndDepositionKernel(
 
 	if(max_vol > current_vol)
 	{
-		float sed_change_vol = mix(1.f, hit_dot, constants->K_coll) * constants->delta_t * constants->K_s * length(state_middle->water_vel)/* * (max_vol - current_vol)*/;
+		float sed_change_vol = min(
+			mix(1.f, hit_dot, constants->K_coll) * constants->delta_t * constants->K_s * length(state_middle->water_vel),
+			max_vol - current_vol);
 		float sed_change_rock_vol = sed_change_vol * 0.3f;
 		float sed_change_dep_vol  = sed_change_vol * 0.7f;
 
