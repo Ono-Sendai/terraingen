@@ -6,6 +6,8 @@ add_definitions(/MP) # Enable multi-processor compilation.
 add_definitions(/W4)
 add_definitions(-DUNICODE -D_UNICODE)
 add_definitions(-D__SSE3__ -D__SSSE3__ -D__SSE4_1__)
+add_definitions(/std:c++17)
+add_definitions(/Zc:__cplusplus) # Make the __cplusplus macro show the updated, actual C++ version.
 
 add_definitions(-DPNG_ALLOW_BENIGN_ERRORS=1)
 add_definitions(-DPNG_INTEL_SSE=1)
@@ -366,6 +368,10 @@ ${GLARE_CORE_TRUNK}/utils/IndigoXMLDoc.cpp
 ${GLARE_CORE_TRUNK}/utils/IndigoXMLDoc.h
 ${GLARE_CORE_TRUNK}/utils/ArgumentParser.cpp
 ${GLARE_CORE_TRUNK}/utils/ArgumentParser.h
+${GLARE_CORE_TRUNK}/utils/StackAllocator.cpp
+${GLARE_CORE_TRUNK}/utils/StackAllocator.h
+${GLARE_CORE_TRUNK}/utils/FastPoolAllocator.cpp
+${GLARE_CORE_TRUNK}/utils/FastPoolAllocator.h
 )
 
 set(maths
@@ -386,16 +392,16 @@ ${MESHOPTIMIZER_DIR}/allocator.cpp
 ${MESHOPTIMIZER_DIR}/clusterizer.cpp
 ${MESHOPTIMIZER_DIR}/indexcodec.cpp
 ${MESHOPTIMIZER_DIR}/indexgenerator.cpp
-${MESHOPTIMIZER_DIR}/overdrawanalyzer.cpp
+#${MESHOPTIMIZER_DIR}/overdrawanalyzer.cpp
 ${MESHOPTIMIZER_DIR}/overdrawoptimizer.cpp
 ${MESHOPTIMIZER_DIR}/simplifier.cpp
 ${MESHOPTIMIZER_DIR}/spatialorder.cpp
 ${MESHOPTIMIZER_DIR}/stripifier.cpp
-${MESHOPTIMIZER_DIR}/vcacheanalyzer.cpp
+#${MESHOPTIMIZER_DIR}/vcacheanalyzer.cpp
 ${MESHOPTIMIZER_DIR}/vcacheoptimizer.cpp
 ${MESHOPTIMIZER_DIR}/vertexcodec.cpp
 ${MESHOPTIMIZER_DIR}/vertexfilter.cpp
-${MESHOPTIMIZER_DIR}/vfetchanalyzer.cpp
+#${MESHOPTIMIZER_DIR}/vfetchanalyzer.cpp
 ${MESHOPTIMIZER_DIR}/vfetchoptimizer.cpp   
 )
 
@@ -407,6 +413,7 @@ FILE(GLOB double_conversion "${GLARE_CORE_TRUNK}/double-conversion/*.cc" "${GLAR
 SOURCE_GROUP(indigo FILES ${indigo})
 SOURCE_GROUP(graphics FILES ${graphics})
 SOURCE_GROUP(opengl FILES ${opengl})
+SOURCE_GROUP(opengl_ui FILES ${opengl_ui})
 SOURCE_GROUP(utils FILES ${utils})
 SOURCE_GROUP(maths FILES ${maths})
 SOURCE_GROUP(double-conversion FILES ${double_conversion})
@@ -422,6 +429,7 @@ erosion_kernel.cl
 ${indigo}
 ${graphics}
 ${opengl}
+#${opengl_ui}
 ${utils}
 ${maths}
 ${double_conversion}
